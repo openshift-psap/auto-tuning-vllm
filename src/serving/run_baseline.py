@@ -1,10 +1,13 @@
 import os
 import sys
+import subprocess
+import time
+import gc
 from src.serving.vllm_server import build_vllm_command, start_vllm_server, stop_vllm_server
 from src.serving.benchmarking import run_guidellm, parse_benchmarks
 
 def run_baseline_test(model=None, max_seconds=None, prompt_tokens=None, output_tokens=None, dataset=None,
-                     study_dir=None, vllm_logs_dir=None, guidellm_logs_dir=None, study_id=None, concurrency=50):
+                     study_dir=None, vllm_logs_dir=None, guidellm_logs_dir=None, study_id=None, concurrency=50, gpu_id=0):
     port = 8000
     
     if model is None:
@@ -24,11 +27,27 @@ def run_baseline_test(model=None, max_seconds=None, prompt_tokens=None, output_t
     print(f"Duration: {max_seconds} seconds")
     print(f"Prompt tokens: {prompt_tokens}, Output tokens: {output_tokens}")
     print(f"Concurrency: {concurrency}")
+    print(f"GPU ID: {gpu_id}")
     print(f"vLLM log file: {vllm_log_file}")
     print(f"guidellm log file: {guidellm_log_file}")
     
-    vllm_cmd = build_vllm_command(model_name=model, port=port, candidate_flags=[])
-    vllm_proc = start_vllm_server(vllm_cmd, log_file=vllm_log_file)
+    # Set CUDA_VISIBLE_DEVICES for this specific GPU
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    
+    # Add memory management environment variables
+    env['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+    
+    # Add baseline-specific flags to manage memory usage
+    baseline_flags = [
+        "--gpu-memory-utilization", "0.85",  # Use 85% of GPU memory instead of default 90%
+        "--max-num-seqs", str(concurrency),   # Limit concurrent sequences
+        "--disable-sliding-window",           # Disable sliding window to save memory
+        "--enforce-eager"                     # Use eager execution to avoid compilation overhead
+    ]
+    
+    vllm_cmd = build_vllm_command(model_name=model, port=port, candidate_flags=baseline_flags)
+    vllm_proc = start_vllm_server(vllm_cmd, log_file=vllm_log_file, env=env)
 
     bench_file = os.path.join(study_dir, f"benchmarks_{study_id}.baseline.concurrency_{concurrency}.json")
 

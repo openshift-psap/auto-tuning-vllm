@@ -7,7 +7,7 @@ import yaml
 import argparse
 from optuna.samplers import TPESampler, RandomSampler, NSGAIISampler, GridSampler
 from optuna.integration import BoTorchSampler
-from src.serving.utils import validate_huggingface_model
+from src.serving.utils import validate_huggingface_model, save_config_to_study
 from src.serving.optimization import (
     multi_objective_function, objective, p95_latency_objective_function
 )
@@ -45,6 +45,9 @@ GUIDELLM_LOGS_DIR = os.path.join(STUDY_DIR, "guidellm_logs")
 os.makedirs(STUDY_DIR, exist_ok=True)
 os.makedirs(VLLM_LOGS_DIR, exist_ok=True)
 os.makedirs(GUIDELLM_LOGS_DIR, exist_ok=True)
+
+# Save configuration file to study directory
+save_config_to_study(VLLM_CONFIG_PATH, STUDY_DIR, STUDY_ID)
 
 print(f"Logging this study's data to: {STUDY_DIR}")
 print(f"Logging vLLM server logs to: {VLLM_LOGS_DIR}")
@@ -129,6 +132,12 @@ def main():
                         help='Number of optimization trials (overrides config)')
     parser.add_argument('--dataset', type=str,
                         help='Dataset for guidellm: HuggingFace dataset ID, local path to dataset file (CSV, JSONL, etc.), or leave empty to use synthetic data')
+    parser.add_argument('--parallel', action='store_true',
+                        help='Enable parallel optimization across multiple GPUs')
+    parser.add_argument('--gpus', type=str, default="0,1",
+                        help='Comma-separated list of GPU IDs for parallel optimization (default: "0,1")')
+    parser.add_argument('--baseline-gpu', type=int, default=0,
+                        help='GPU ID to use for baseline test (default: 0)')
     
     args = parser.parse_args()
     
@@ -144,9 +153,10 @@ def main():
     print("=" * 80)
     print("RUNNING BASELINE TESTS WITH DIFFERENT CONCURRENCY LEVELS")
     print("=" * 80)
+    print(f"Selected GPU for baseline: {args.baseline_gpu}")
     
     # Run 5 baseline tests with concurrency levels from 50 to 250 in steps of 50
-    concurrency_levels = [50, 100, 150, 200] #, 100, 150, 200
+    concurrency_levels = [50] #, 100, 150, 200
     baseline_results = []
     
     for concurrency in concurrency_levels:
@@ -156,7 +166,7 @@ def main():
         
         baseline_metrics = run_baseline_test(
             model, args.max_seconds, args.prompt_tokens, args.output_tokens, args.dataset,
-            STUDY_DIR, VLLM_LOGS_DIR, GUIDELLM_LOGS_DIR, STUDY_ID, concurrency
+            STUDY_DIR, VLLM_LOGS_DIR, GUIDELLM_LOGS_DIR, STUDY_ID, concurrency, gpu_id=args.baseline_gpu
         )
         
         if baseline_metrics is not None:
@@ -318,12 +328,28 @@ def main():
 
     print(f"\nStarting Optuna trials with {optimization_approach} approach...")
     
-    if sampler_name == "grid":
-        print(f"Will run ALL grid combinations (no n_trials limit)")
-        study.optimize(objective_function)
+    # Check if parallel optimization is requested
+    if args.parallel:
+        gpu_ids = [int(gpu.strip()) for gpu in args.gpus.split(',')]
+        print(f"Using parallel optimization with {sampler_name} sampler on GPUs: {gpu_ids}")
+        print("Note: Parallel optimization currently only supports single-objective optimization")
+        
+        if optimization_approach == "multi_objective":
+            print("Warning: Multi-objective optimization is not supported with parallel mode. Switching to single-objective.")
+            optimization_approach = "single_objective"
+        
+        from src.serving.optimization import run_parallel_trials
+        study = run_parallel_trials(
+            study, model, args.max_seconds, args.prompt_tokens, args.output_tokens, args.dataset,
+            vllm_config, STUDY_DIR, VLLM_LOGS_DIR, GUIDELLM_LOGS_DIR, STUDY_ID, gpu_ids, n_trials
+        )
     else:
-        print(f"Will run {n_trials} optimization trials")
-        study.optimize(objective_function, n_trials=n_trials)
+        if sampler_name == "grid":
+            print(f"Will run ALL grid combinations (no n_trials limit)")
+            study.optimize(objective_function)
+        else:
+            print(f"Will run {n_trials} optimization trials")
+            study.optimize(objective_function, n_trials=n_trials)
 
     print("\nOptimization Results:")
     if optimization_approach == "multi_objective":

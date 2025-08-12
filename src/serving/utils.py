@@ -48,4 +48,19 @@ def get_last_log_lines(log_file, n=20):
             lines = f.readlines()
             return ''.join(lines[-n:]) if lines else ''
     except Exception as e:
-        return f"Could not read log file: {str(e)}" 
+        return f"Could not read log file: {str(e)}"
+
+def save_config_to_study(config_path, study_dir, study_id):
+    """Save the configuration file to the study directory."""
+    import shutil
+    
+    config_filename = f"vllm_config_study_{study_id}.yaml"
+    dest_path = os.path.join(study_dir, config_filename)
+    
+    try:
+        shutil.copy2(config_path, dest_path)
+        print(f"✓ Configuration saved to: {dest_path}")
+        return dest_path
+    except Exception as e:
+        print(f"✗ Failed to save configuration: {e}")
+        return None 

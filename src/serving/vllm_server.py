@@ -11,7 +11,7 @@ def build_vllm_command(model_name, port, candidate_flags):
         "vllm",
         "serve",
         model_name,
-        "--max-model-len", "11000",
+        "--max-model-len", "4096",
         "--port", str(port),
         "--disable-log-requests"
     ]
@@ -48,14 +48,15 @@ def build_vllm_command(model_name, port, candidate_flags):
     cmd += candidate_flags
     return cmd
 
-def start_vllm_server(cmd, ready_pattern="Application startup complete", timeout=30000, log_file=None):
+def start_vllm_server(cmd, ready_pattern="Application startup complete", timeout=30000, log_file=None, env=None):
     if not check_port_available(int(cmd[cmd.index('--port') + 1])):
         raise RuntimeError(f"Port {cmd[cmd.index('--port') + 1]} is already in use")
 
     print(f"Launching vLLM server {' '.join(cmd)}")
     
     # Set environment variables to help prevent CUDA out of memory issues
-    # env = os.environ.copy()
+    if env is None:
+        env = os.environ.copy()
     # env['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
     
     # print("Setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to prevent CUDA memory fragmentation")
@@ -70,6 +71,7 @@ def start_vllm_server(cmd, ready_pattern="Application startup complete", timeout
                 text=True,
                 bufsize=1,
                 preexec_fn=os.setsid,
+                env=env,
             )
     except FileNotFoundError:
         raise RuntimeError(f"vLLM binary not found. Is vllm installed and in PATH?")
