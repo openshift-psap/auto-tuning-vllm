@@ -7,18 +7,20 @@ parameters:
 
   compilation_config:
     name: "compilation-config"
-    enabled: true
+    enabled: false
     level: [0, 3]
     
   block_size:
     name: "block-size"
     enabled: true
-    options: [8, 16, 32, 64, 128]
+    options: [8, 16, 32]
+    #, 64 128]
 
   kv_cache_dtype:
     name: "kv-cache-dtype"
     enabled: true
-    options: ["auto", "fp8", "fp8_e5m2", "fp8_e4m3"] # fp8_e5m2 kv-cache is not supported with fp8 checkpoint
+    options: ["fp8"]
+    #["auto", "fp8", "fp8_e5m2", "fp8_e4m3"] # fp8_e5m2 kv-cache is not supported with fp8 checkpoint
 
   gpu_memory_utilization:
     name: "gpu-memory-utilization"
@@ -36,7 +38,7 @@ parameters:
   # Guidellm concurrency parameter
   guidellm_concurrency:
     name: "guidellm-concurrency"
-    enabled: true
+    enabled: false
     range:
       start: 10
       end: 240
@@ -47,13 +49,13 @@ parameters:
     enabled: true
     range:
       start: 8
-      end: 16384
-      step: 64
+      end:  8192
+      step: 128
 
   long_prefill_token_threshold:
     name: "long-prefill-token-threshold"
     enabled: true
-    options: [0, 256, 512, 1024, 2048, 4096, 8192]
+    options: [0, 256, 512, 1024, 2048, 4096]
 
   max_seq_len_to_capture:
     name: "max-seq-len-to-capture"
@@ -72,9 +74,8 @@ optimization:
   approach: "multi_objective"
   
   n_trials: 200
-
   # choose between ["botorch", "nsga2", "tpe", "random", "grid"]
   sampler: "botorch"
 
 settings:
-  trial_interval: 30
+  trial_interval: 5
