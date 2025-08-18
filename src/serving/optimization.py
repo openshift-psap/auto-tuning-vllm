@@ -48,7 +48,9 @@ def generate_vllm_parameters(trial, config):
 
 def run_single_trial(trial, model=None, max_seconds=None, prompt_tokens=None, output_tokens=None, dataset=None, 
                     vllm_config=None, study_dir=None, vllm_logs_dir=None, guidellm_logs_dir=None, study_id=None):
-    port = 8000
+    # Use prescribed port range (GPU 0 for single trials)
+    from src.serving.utils import get_port_for_gpu
+    port = get_port_for_gpu(0, start_port=60000)  # Default for sequential trials
     
     if model is None:
         model = "Qwen/Qwen3-32B-FP8"
@@ -99,7 +101,7 @@ def run_single_trial(trial, model=None, max_seconds=None, prompt_tokens=None, ou
         print("Starting guidellm benchmark...")
         guidellm_args = [ # TODO: try setting it to have a set RPS
             "benchmark",
-            "--target",      "http://localhost:8000",
+            "--target",      f"http://localhost:{port}",
             "--model",       model,
             "--processor",   model,
         ]
@@ -202,12 +204,13 @@ def p95_latency_objective_function(trial, model, max_seconds, prompt_tokens, out
         raise optuna.TrialPruned(f"Trial failed: {str(e)}")
 
 def run_single_trial_parallel(trial, model, max_seconds, prompt_tokens, output_tokens, dataset,
-                              vllm_config, study_dir, vllm_logs_dir, guidellm_logs_dir, study_id, gpu_id):
+                              vllm_config, study_dir, vllm_logs_dir, guidellm_logs_dir, study_id, gpu_id, start_port):
     """
     Run a single trial on a specific GPU for parallel optimization
     """
-    # Use different ports for each GPU to avoid conflicts
-    port = 8000 + gpu_id
+    # Use prescribed port range for parallel trials
+    from src.serving.utils import get_port_for_gpu
+    port = get_port_for_gpu(gpu_id, start_port)
     
     if model is None:
         model = "Qwen/Qwen3-32B-FP8"
@@ -306,7 +309,7 @@ def run_single_trial_parallel(trial, model, max_seconds, prompt_tokens, output_t
 
 
 def run_parallel_trials(study, model, max_seconds, prompt_tokens, output_tokens, dataset,
-                       vllm_config, study_dir, vllm_logs_dir, guidellm_logs_dir, study_id, gpu_ids, n_trials):
+                       vllm_config, study_dir, vllm_logs_dir, guidellm_logs_dir, study_id, gpu_ids, n_trials, start_port):
     """
     Run optimization trials in parallel across multiple GPUs with dynamic scheduling.
     When any GPU completes (success or failure), immediately start the next trial.
@@ -336,8 +339,9 @@ def run_parallel_trials(study, model, max_seconds, prompt_tokens, output_tokens,
     print("Note: Next trial starts immediately when any GPU becomes available")
     print("=" * 60)
     
-    # GPU state tracking
-    gpu_states = {gpu_id: {'status': 'idle', 'trial_id': None, 'trial_obj': None, 'port': 8000 + gpu_id, 'future': None} 
+    # GPU state tracking - use prescribed port range
+    from src.serving.utils import get_port_for_gpu
+    gpu_states = {gpu_id: {'status': 'idle', 'trial_id': None, 'trial_obj': None, 'port': get_port_for_gpu(gpu_id, start_port), 'future': None} 
                   for gpu_id in gpu_ids}
     
     completed_trials = 0
@@ -346,16 +350,14 @@ def run_parallel_trials(study, model, max_seconds, prompt_tokens, output_tokens,
     # Thread-safe counters
     stats_lock = threading.Lock()
     
-    def run_trial_on_gpu(gpu_id, trial):
-        """Run a single trial on a specific GPU"""
-        port = gpu_states[gpu_id]['port']
-        
+    def parallel_objective_wrapper(gpu_id, trial):
+        """Objective function wrapper for parallel trials - matches sequential behavior"""
         print(f"\n[GPU {gpu_id}] Starting trial {trial.number}")
         
         try:
             metrics = run_single_trial_parallel(
                 trial, model, max_seconds, prompt_tokens, output_tokens, dataset,
-                vllm_config, study_dir, vllm_logs_dir, guidellm_logs_dir, study_id, gpu_id
+                vllm_config, study_dir, vllm_logs_dir, guidellm_logs_dir, study_id, gpu_id, start_port
             )
             
             tokens_per_second = float(metrics["output_tokens_per_second"])
@@ -375,13 +377,17 @@ def run_parallel_trials(study, model, max_seconds, prompt_tokens, output_tokens,
             if "CUDA out of memory" in error_msg or "OutOfMemoryError" in error_msg:
                 print(f"[GPU {gpu_id}] OOM detected - GPU memory exhausted, moving to next trial")
             
-            trial.set_user_attr("error", str(error_msg))
+            # Match sequential objective function error handling exactly
+            import traceback
+            trial.set_user_attr("error", str(e))
+            trial.set_user_attr("traceback", traceback.format_exc())
             
             with stats_lock:
                 nonlocal failed_trials
                 failed_trials += 1
                 
-            raise Exception(f"Trial failed: {str(e)}")
+            # Use proper Optuna exception like sequential trials
+            raise optuna.TrialPruned(f"Trial failed: {str(e)}")
     
     # Use ThreadPoolExecutor for dynamic scheduling
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(gpu_ids)) as executor:
@@ -421,8 +427,8 @@ def run_parallel_trials(study, model, max_seconds, prompt_tokens, output_tokens,
                     try:
                         trial = study.ask()
                         
-                        # Submit trial to this GPU
-                        future = executor.submit(run_trial_on_gpu, gpu_id, trial)
+                        # Submit trial to this GPU using proper objective wrapper
+                        future = executor.submit(parallel_objective_wrapper, gpu_id, trial)
                         gpu_state['future'] = future
                         gpu_state['status'] = 'running'
                         gpu_state['trial_id'] = trial.number

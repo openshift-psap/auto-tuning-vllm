@@ -138,6 +138,8 @@ def main():
                         help='Comma-separated list of GPU IDs for parallel optimization (default: "0,1")')
     parser.add_argument('--baseline-gpu', type=int, default=0,
                         help='GPU ID to use for baseline test (default: 0)')
+    parser.add_argument('--start-port', type=int, default=60000,
+                        help='Starting port number for parallel trials (default: 60000)')
     
     args = parser.parse_args()
     
@@ -334,6 +336,32 @@ def main():
         print(f"Using parallel optimization with {sampler_name} sampler on GPUs: {gpu_ids}")
         print("Note: Parallel optimization currently only supports single-objective optimization")
         
+        # Check ALL required ports are available before starting study
+        from src.serving.utils import check_all_ports_available_for_study
+        print(f"\nChecking prescribed port range for {len(gpu_ids)} parallel trials...")
+        print(f"Start port: {args.start_port}")
+        
+        all_available, unavailable_ports, required_ports = check_all_ports_available_for_study(gpu_ids, args.start_port)
+        print(f"Required port range: {required_ports}")
+        
+        if not all_available:
+            # NOISY ERROR - exactly as specified
+            print(f"\n" + "="*80)
+            print(f"❌ FATAL ERROR: PORT CONFLICT DETECTED")
+            print(f"="*80)
+            print(f"The following ports are already in use: {unavailable_ports}")
+            print(f"Required ports for parallel trials: {required_ports}")
+            print(f"")
+            print(f"PARALLEL STUDY CANNOT START WITH PORT CONFLICTS.")
+            print(f"")
+            print(f"Please:")
+            print(f"1. Kill any processes using these ports, OR")
+            print(f"2. Use a different --start-port value")
+            print(f"="*80)
+            sys.exit(1)
+        
+        print(f"✅ All {len(required_ports)} ports in prescribed range are available")
+        
         if optimization_approach == "multi_objective":
             print("Warning: Multi-objective optimization is not supported with parallel mode. Switching to single-objective.")
             optimization_approach = "single_objective"
@@ -341,7 +369,7 @@ def main():
         from src.serving.optimization import run_parallel_trials
         study = run_parallel_trials(
             study, model, args.max_seconds, args.prompt_tokens, args.output_tokens, args.dataset,
-            vllm_config, STUDY_DIR, VLLM_LOGS_DIR, GUIDELLM_LOGS_DIR, STUDY_ID, gpu_ids, n_trials
+            vllm_config, STUDY_DIR, VLLM_LOGS_DIR, GUIDELLM_LOGS_DIR, STUDY_ID, gpu_ids, n_trials, args.start_port
         )
     else:
         if sampler_name == "grid":

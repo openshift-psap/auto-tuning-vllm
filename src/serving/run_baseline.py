@@ -8,7 +8,9 @@ from src.serving.benchmarking import run_guidellm, parse_benchmarks
 
 def run_baseline_test(model=None, max_seconds=None, prompt_tokens=None, output_tokens=None, dataset=None,
                      study_dir=None, vllm_logs_dir=None, guidellm_logs_dir=None, study_id=None, concurrency=50, gpu_id=0):
-    port = 8000
+    # Use prescribed port range (default start port for baseline)
+    from src.serving.utils import get_port_for_gpu
+    port = get_port_for_gpu(gpu_id, start_port=60000)  # Default for baseline tests
     
     if model is None:
         model = "Qwen/Qwen3-32B-FP8"
@@ -55,7 +57,7 @@ def run_baseline_test(model=None, max_seconds=None, prompt_tokens=None, output_t
         print("Starting guidellm benchmark for baseline...")
         guidellm_args = [
             "benchmark",
-            "--target",      "http://localhost:8000",
+            "--target",      f"http://localhost:{port}",
             "--model",       model,
             "--processor",   model,
         ]

@@ -216,17 +216,26 @@ def query_vllm_server(port, prompt, max_retries=3, retry_delay=1):
         
     raise RuntimeError(f"Failed to query vLLM server after {max_retries} attempts. Last error: {last_error}")
 
-def cleanup_zombie_vllm_processes():
-    """Clean up any zombie vLLM processes that might be blocking the port."""
+def cleanup_zombie_vllm_processes(ports_to_check=None):
+    """Clean up any zombie vLLM processes that might be blocking ports."""
     print("Checking for zombie vLLM processes...")
     
+    # Default to checking common ports if none specified
+    if ports_to_check is None:
+        ports_to_check = [8000]  # Legacy default
+    
     try:
-        # Check if port 8000 is in use
-        if check_port_available(8000):
-            print("Port 8000 is available - no cleanup needed")
+        # Check if any of the specified ports are in use
+        ports_in_use = []
+        for port in ports_to_check:
+            if not check_port_available(port):
+                ports_in_use.append(port)
+        
+        if not ports_in_use:
+            print(f"All specified ports {ports_to_check} are available - no cleanup needed")
             return
             
-        print("Port 8000 is in use - attempting cleanup...")
+        print(f"Ports {ports_in_use} are in use - attempting cleanup...")
         
         # Try to find and kill vLLM processes
         result = subprocess.run(
@@ -257,11 +266,16 @@ def cleanup_zombie_vllm_processes():
             # Wait a bit for processes to clean up
             time.sleep(3)
             
-            # Check if port is now available
-            if check_port_available(8000):
-                print("✓ Port 8000 is now available after cleanup")
+            # Check if ports are now available
+            still_in_use = []
+            for port in ports_in_use:
+                if not check_port_available(port):
+                    still_in_use.append(port)
+            
+            if not still_in_use:
+                print(f"✓ All ports {ports_in_use} are now available after cleanup")
             else:
-                print("⚠ Port 8000 is still in use after cleanup")
+                print(f"⚠ Ports {still_in_use} are still in use after cleanup")
                 
         else:
             print("No vLLM processes found")

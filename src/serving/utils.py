@@ -42,6 +42,33 @@ def check_port_available(port):
     finally:
         sock.close()
 
+def get_port_for_gpu(gpu_id, start_port):
+    """Get port number for a specific GPU ID from prescribed range."""
+    return start_port + gpu_id
+
+def check_all_ports_available_for_study(gpu_ids, start_port):
+    """
+    Check if ALL required ports are available for parallel study.
+    This must be called before study starts.
+    
+    Args:
+        gpu_ids: List of GPU IDs that will be used
+        start_port: Starting port number from user
+        
+    Returns:
+        Tuple of (all_available: bool, unavailable_ports: List[int])
+    """
+    unavailable_ports = []
+    required_ports = []
+    
+    for gpu_id in gpu_ids:
+        port = get_port_for_gpu(gpu_id, start_port)
+        required_ports.append(port)
+        if not check_port_available(port):
+            unavailable_ports.append(port)
+    
+    return len(unavailable_ports) == 0, unavailable_ports, required_ports
+
 def get_last_log_lines(log_file, n=20):
     try:
         with open(log_file, 'r') as f:
