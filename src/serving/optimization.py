@@ -2,7 +2,6 @@ import optuna
 import sys
 import time
 import os
-import re
 import threading
 import concurrent.futures
 from src.serving.vllm_server import build_vllm_command, start_vllm_server, stop_vllm_server
@@ -46,7 +45,8 @@ def generate_vllm_parameters(trial, config):
     
     return candidate_flags
 
-def run_single_trial(trial, model=None, max_seconds=None, prompt_tokens=None, output_tokens=None, dataset=None, 
+# DEPRECATED: This function is no longer used - all workflows now use run_parallel_trials
+def run_single_trial_DEPRECATED(trial, model=None, max_seconds=None, prompt_tokens=None, output_tokens=None, dataset=None, 
                     vllm_config=None, study_dir=None, vllm_logs_dir=None, guidellm_logs_dir=None, study_id=None):
     # Use prescribed port range (GPU 0 for single trials)
     from src.serving.utils import get_port_for_gpu
@@ -139,10 +139,11 @@ def run_single_trial(trial, model=None, max_seconds=None, prompt_tokens=None, ou
         print(f"Waiting {interval} seconds before next trial...")
         time.sleep(interval)
 
-def multi_objective_function(trial, model=None, max_seconds=None, prompt_tokens=None, output_tokens=None, dataset=None,
+# DEPRECATED: This function is no longer used - all workflows now use run_parallel_trials  
+def multi_objective_function_DEPRECATED(trial, model=None, max_seconds=None, prompt_tokens=None, output_tokens=None, dataset=None,
                             vllm_config=None, study_dir=None, vllm_logs_dir=None, guidellm_logs_dir=None, study_id=None):
     try:
-        metrics = run_single_trial(trial, model, max_seconds, prompt_tokens, output_tokens, dataset,
+        metrics = run_single_trial_DEPRECATED(trial, model, max_seconds, prompt_tokens, output_tokens, dataset,
                                  vllm_config, study_dir, vllm_logs_dir, guidellm_logs_dir, study_id)
         
         throughput = float(metrics["output_tokens_per_second"])
@@ -158,11 +159,14 @@ def multi_objective_function(trial, model=None, max_seconds=None, prompt_tokens=
         trial.set_user_attr("traceback", traceback.format_exc())
         raise optuna.TrialPruned(f"Trial failed: {str(e)}")
 
-def objective(trial, model=None, max_seconds=None, prompt_tokens=None, output_tokens=None, dataset=None,
+# DEPRECATED: This function is no longer used - all workflows now use run_parallel_trials
+def objective_DEPRECATED(trial, model=None, max_seconds=None, prompt_tokens=None, output_tokens=None, dataset=None,
              vllm_config=None, study_dir=None, vllm_logs_dir=None, guidellm_logs_dir=None, study_id=None):
     try:
-        metrics = run_single_trial(trial, model, max_seconds, prompt_tokens, output_tokens, dataset,
+        metrics = run_single_trial_DEPRECATED(trial, model, max_seconds, prompt_tokens, output_tokens, dataset,
                                  vllm_config, study_dir, vllm_logs_dir, guidellm_logs_dir, study_id)
+        print(f"DEBUG: Trial {trial.number}, Metric value to return: {metrics['output_tokens_per_second']}")
+        
         return float(metrics["output_tokens_per_second"])
 
     except Exception as e:
@@ -173,10 +177,11 @@ def objective(trial, model=None, max_seconds=None, prompt_tokens=None, output_to
         trial.set_user_attr("traceback", traceback.format_exc())
         raise optuna.TrialPruned(f"Trial failed: {str(e)}")
 
-def p95_latency_objective_function(trial, model, max_seconds, prompt_tokens, output_tokens, dataset=None,
+# DEPRECATED: This function is no longer used - all workflows now use run_parallel_trials
+def p95_latency_objective_function_DEPRECATED(trial, model, max_seconds, prompt_tokens, output_tokens, dataset=None,
                                   vllm_config=None, study_dir=None, vllm_logs_dir=None, guidellm_logs_dir=None, study_id=None):
     try:
-        metrics = run_single_trial(trial, model, max_seconds, prompt_tokens, output_tokens, dataset,
+        metrics = run_single_trial_DEPRECATED(trial, model, max_seconds, prompt_tokens, output_tokens, dataset,
                                  vllm_config, study_dir, vllm_logs_dir, guidellm_logs_dir, study_id)
         
         p95_latency = metrics.get("request_latency_p95")
@@ -332,7 +337,7 @@ def run_parallel_trials(study, model, max_seconds, prompt_tokens, output_tokens,
     Returns:
         Updated study object
     """
-    print(f"\nParallel optimization")
+    print("\nParallel optimization")
     print(f"GPUs: {gpu_ids}")
     print(f"Total trials: {n_trials}")
     print(f"Dynamic workers: {len(gpu_ids)}")
@@ -351,7 +356,8 @@ def run_parallel_trials(study, model, max_seconds, prompt_tokens, output_tokens,
     stats_lock = threading.Lock()
     
     def parallel_objective_wrapper(gpu_id, trial):
-        """Objective function wrapper for parallel trials - matches sequential behavior"""
+        """Objective function wrapper for parallel trials - supports both single and multi-objective"""
+        nonlocal completed_trials, failed_trials
         print(f"\n[GPU {gpu_id}] Starting trial {trial.number}")
         
         try:
@@ -361,13 +367,25 @@ def run_parallel_trials(study, model, max_seconds, prompt_tokens, output_tokens,
             )
             
             tokens_per_second = float(metrics["output_tokens_per_second"])
-            print(f"[GPU {gpu_id}] Trial {trial.number}: {tokens_per_second:.2f} tokens/s")
             
-            with stats_lock:
-                nonlocal completed_trials
-                completed_trials += 1
+            # Determine return format based on study type
+            if hasattr(study, 'directions') and len(study.directions) > 1:
+                # Multi-objective study - return (throughput, latency)
+                latency = float(metrics["request_latency"]) 
+                print(f"[GPU {gpu_id}] Trial {trial.number}: {tokens_per_second:.2f} tokens/s, {latency:.2f}ms latency")
                 
-            return tokens_per_second
+                with stats_lock:
+                    completed_trials += 1
+                    
+                return tokens_per_second, latency
+            else:
+                # Single-objective study - return just throughput
+                print(f"[GPU {gpu_id}] Trial {trial.number}: {tokens_per_second:.2f} tokens/s")
+                
+                with stats_lock:
+                    completed_trials += 1
+                    
+                return tokens_per_second
                 
         except Exception as e:
             error_msg = str(e)
@@ -383,7 +401,6 @@ def run_parallel_trials(study, model, max_seconds, prompt_tokens, output_tokens,
             trial.set_user_attr("traceback", traceback.format_exc())
             
             with stats_lock:
-                nonlocal failed_trials
                 failed_trials += 1
                 
             # Use proper Optuna exception like sequential trials
@@ -412,7 +429,7 @@ def run_parallel_trials(study, model, max_seconds, prompt_tokens, output_tokens,
                             if 'trial_obj' in gpu_state and gpu_state['trial_obj']:
                                 try:
                                     study.tell(gpu_state['trial_obj'], state=optuna.trial.TrialState.FAIL)
-                                except:
+                                except Exception:
                                     pass  # Don't fail if we can't mark it as failed
                         
                         gpu_state['status'] = 'idle'
@@ -459,17 +476,32 @@ def run_parallel_trials(study, model, max_seconds, prompt_tokens, output_tokens,
                     if gpu_states[gpu_id]['trial_obj']:
                         try:
                             study.tell(gpu_states[gpu_id]['trial_obj'], state=optuna.trial.TrialState.FAIL)
-                        except:
+                        except Exception:
                             pass
     
-    print(f"\nParallel optimization complete!")
+    print("\nParallel optimization complete!")
     print(f"Completed trials: {completed_trials}")
     print(f"Failed trials: {failed_trials}")
     print(f"Total trials: {completed_trials + failed_trials}")
     
-    if study.best_trial:
-        print(f"Best trial: {study.best_trial.value:.2f} tokens/s")
-        print(f"Best parameters: {study.best_trial.params}")
+    # Report results based on study type
+    if len(study.trials) > 0:
+        try:
+            # Try single-objective approach first
+            best_trial = study.best_trial
+            print(f"Best trial: {best_trial.value:.2f} tokens/s")
+            print(f"Best parameters: {best_trial.params}")
+        except RuntimeError:
+            # Multi-objective study - show Pareto front
+            print("Multi-objective results:")
+            print(f"Number of Pareto-optimal solutions: {len(study.best_trials)}")
+            print("Top solutions:")
+            for i, trial in enumerate(study.best_trials[:5]):
+                throughput, latency = trial.values
+                print(f"  Solution {i+1}: Throughput={throughput:.2f} tokens/s, Latency={latency:.2f}ms")
+                print(f"    Parameters: {trial.params}")
+    else:
+        print("No successful trials completed.")
     
     return study
 

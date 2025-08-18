@@ -1,21 +1,11 @@
 import optuna
 import os
 import json
-import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import plotly.io as pio
 
 # Import all optuna visualization modules
-from optuna.visualization import plot_contour
-from optuna.visualization import plot_edf
-from optuna.visualization import plot_intermediate_values
 from optuna.visualization import plot_optimization_history
-from optuna.visualization import plot_parallel_coordinate
-from optuna.visualization import plot_param_importances
-from optuna.visualization import plot_rank
-from optuna.visualization import plot_slice
-from optuna.visualization import plot_timeline
 
 def load_baseline_metrics(study_dir, study_id):
     """Load baseline metrics from multiple concurrency JSON files."""
@@ -103,7 +93,7 @@ def create_single_objective_visualization(study, baseline_metrics, study_dir, st
     fig.write_html(html_path)
     saved_files = [html_path]
     
-    print(f"Single-objective visualization saved:")
+    print("Single-objective visualization saved:")
     print(f"  HTML: {html_path}")
     
     return saved_files
@@ -168,7 +158,6 @@ def create_multi_objective_visualizations(study, baseline_metrics, study_dir, st
     ))
     
     # Add all baseline throughputs as separate traces
-    baseline_traces = []
     if baseline_metrics:
         for i, (concurrency, metrics) in enumerate(baseline_metrics.items()):
             baseline_throughput = metrics.get('output_tokens_per_second', 0)
@@ -391,7 +380,7 @@ def create_multi_objective_visualizations(study, baseline_metrics, study_dir, st
     fig3.write_html(html_path3)
     saved_files.append(html_path3)
     
-    print(f"Multi-objective visualizations saved:")
+    print("Multi-objective visualizations saved:")
     for file_path in saved_files:
         print(f"  {file_path}")
     
@@ -482,7 +471,7 @@ def main():
                 print(f"Could not load study or list studies: {e}")
                 return
         
-        print(f"Study loaded successfully!")
+        print("Study loaded successfully!")
         print(f"Study name: {study.study_name}")
         
         # Handle both single and multi-objective studies

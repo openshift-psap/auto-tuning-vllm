@@ -74,7 +74,7 @@ def start_vllm_server(cmd, ready_pattern="Application startup complete", timeout
                 env=env,
             )
     except FileNotFoundError:
-        raise RuntimeError(f"vLLM binary not found. Is vllm installed and in PATH?")
+        raise RuntimeError("vLLM binary not found. Is vllm installed and in PATH?")
     except OSError as e:
         raise RuntimeError(f"Failed to start vLLM server: {e.strerror}\nCommand: {' '.join(cmd)}")
     except Exception as e:

@@ -8,9 +8,7 @@ import argparse
 from optuna.samplers import TPESampler, RandomSampler, NSGAIISampler, GridSampler
 from optuna.integration import BoTorchSampler
 from src.serving.utils import validate_huggingface_model, save_config_to_study
-from src.serving.optimization import (
-    multi_objective_function, objective, p95_latency_objective_function
-)
+from src.serving.optimization import run_parallel_trials, p95_latency_objective_function_DEPRECATED
 from src.serving.run_baseline import run_baseline_test
 from src.serving.vllm_server import cleanup_zombie_vllm_processes
 
@@ -61,7 +59,7 @@ def build_grid_search_space(config):
     
     total_combinations = 1
     
-    print(f"DEBUG: Building grid search space from config...")
+    print("DEBUG: Building grid search space from config...")
     
     for param_name, param_config in parameters.items():
         if not param_config.get("enabled", False):
@@ -132,10 +130,8 @@ def main():
                         help='Number of optimization trials (overrides config)')
     parser.add_argument('--dataset', type=str,
                         help='Dataset for guidellm: HuggingFace dataset ID, local path to dataset file (CSV, JSONL, etc.), or leave empty to use synthetic data')
-    parser.add_argument('--parallel', action='store_true',
-                        help='Enable parallel optimization across multiple GPUs')
-    parser.add_argument('--gpus', type=str, default="0,1",
-                        help='Comma-separated list of GPU IDs for parallel optimization (default: "0,1")')
+    parser.add_argument('--gpus', type=str, default="0",
+                        help='Comma-separated list of GPU IDs to use (default: "0" for single GPU)')
     parser.add_argument('--baseline-gpu', type=int, default=0,
                         help='GPU ID to use for baseline test (default: 0)')
     parser.add_argument('--start-port', type=int, default=60000,
@@ -189,7 +185,7 @@ def main():
     storage_url = f"sqlite:///{db_path}"
     
     if args.mode == 'p95_latency':
-        print(f"=== P95 LATENCY OPTIMIZATION MODE ===")
+        print("=== P95 LATENCY OPTIMIZATION MODE ===")
         print(f"Model: {model}")
         print(f"Trial duration: {args.max_seconds} seconds")
         if args.dataset:
@@ -199,7 +195,7 @@ def main():
             print(f"Output tokens: {args.output_tokens}")
         n_trials = args.n_trials if args.n_trials else 100
         print(f"Number of trials: {n_trials}")
-        print(f"Objective: Minimize P95 end-to-end latency")
+        print("Objective: Minimize P95 end-to-end latency")
         print("=" * 50)
         
         study = optuna.create_study(
@@ -210,7 +206,7 @@ def main():
         )
         
         def objective_function(trial):
-            return p95_latency_objective_function(
+            return p95_latency_objective_function_DEPRECATED(
                 trial, model, args.max_seconds, args.prompt_tokens, args.output_tokens, args.dataset,
                 vllm_config, STUDY_DIR, VLLM_LOGS_DIR, GUIDELLM_LOGS_DIR, STUDY_ID
             )
@@ -231,28 +227,28 @@ def main():
             improvement = ((baseline_p95 - best_p95_latency) / baseline_p95) * 100
             print(f"P95 latency improvement over baseline: {improvement:.2f}%")
         
-        print(f"Best trial parameters:")
+        print("Best trial parameters:")
         for param, value in best_trial.params.items():
             print(f"  --{param.replace('_', '-')}: {value}")
         
         if hasattr(best_trial, 'user_attrs'):
-            print(f"\nAdditional metrics from best trial:")
+            print("\nAdditional metrics from best trial:")
             for attr, value in best_trial.user_attrs.items():
                 if 'latency' in attr.lower() and value is not None:
                     print(f"  {attr}: {value}")
         
-        print(f"\nTo use this configuration:")
+        print("\nTo use this configuration:")
         print(f"vllm serve {model} \\")
         for param, value in best_trial.params.items():
             print(f"  --{param.replace('_', '-')} {value} \\")
-        print(f"  --port 8000")
+        print("  --port 8000")
         
         return
     
     optimization_config = vllm_config.get("optimization", {})
     optimization_approach = optimization_config.get("approach", "single_objective")
     
-    print(f"=== CONFIG-BASED OPTIMIZATION MODE ===")
+    print("=== CONFIG-BASED OPTIMIZATION MODE ===")
     print(f"Approach: {optimization_approach}")
     print(f"Model: {model}")
     print(f"Trial duration: {args.max_seconds} seconds")
@@ -281,8 +277,8 @@ def main():
     elif sampler_name == "grid":
         search_space, total_combinations = build_grid_search_space(vllm_config)
         
-        print(f"\n=== GRID SAMPLER CONFIGURATION ===")
-        print(f"Parameters to optimize:")
+        print("\n=== GRID SAMPLER CONFIGURATION ===")
+        print("Parameters to optimize:")
         for param, values in search_space.items():
             print(f"  {param}: {len(values)} values {values}")
         print(f"Total possible combinations: {total_combinations:,}")
@@ -302,11 +298,7 @@ def main():
             load_if_exists=True
         )
         
-        def objective_function(trial):
-            return multi_objective_function(
-                trial, model, args.max_seconds, args.prompt_tokens, args.output_tokens, args.dataset,
-                vllm_config, STUDY_DIR, VLLM_LOGS_DIR, GUIDELLM_LOGS_DIR, STUDY_ID
-            )
+
         
         print(f"Using multi-objective optimization (throughput vs latency) with {sampler_name} sampler")
         
@@ -319,65 +311,48 @@ def main():
             load_if_exists=True
         )
         
-        def objective_function(trial):
-            return objective(
-                trial, model, args.max_seconds, args.prompt_tokens, args.output_tokens, args.dataset,
-                vllm_config, STUDY_DIR, VLLM_LOGS_DIR, GUIDELLM_LOGS_DIR, STUDY_ID
-            )
+
         
         print("Using single-objective optimization (maximize throughput)")
         print("Result: Highest throughput configuration (latency not considered)")
 
     print(f"\nStarting Optuna trials with {optimization_approach} approach...")
     
-    # Check if parallel optimization is requested
-    if args.parallel:
-        gpu_ids = [int(gpu.strip()) for gpu in args.gpus.split(',')]
-        print(f"Using parallel optimization with {sampler_name} sampler on GPUs: {gpu_ids}")
-        print("Note: Parallel optimization currently only supports single-objective optimization")
-        
-        # Check ALL required ports are available before starting study
-        from src.serving.utils import check_all_ports_available_for_study
-        print(f"\nChecking prescribed port range for {len(gpu_ids)} parallel trials...")
-        print(f"Start port: {args.start_port}")
-        
-        all_available, unavailable_ports, required_ports = check_all_ports_available_for_study(gpu_ids, args.start_port)
-        print(f"Required port range: {required_ports}")
-        
-        if not all_available:
-            # NOISY ERROR - exactly as specified
-            print(f"\n" + "="*80)
-            print(f"❌ FATAL ERROR: PORT CONFLICT DETECTED")
-            print(f"="*80)
-            print(f"The following ports are already in use: {unavailable_ports}")
-            print(f"Required ports for parallel trials: {required_ports}")
-            print(f"")
-            print(f"PARALLEL STUDY CANNOT START WITH PORT CONFLICTS.")
-            print(f"")
-            print(f"Please:")
-            print(f"1. Kill any processes using these ports, OR")
-            print(f"2. Use a different --start-port value")
-            print(f"="*80)
-            sys.exit(1)
-        
-        print(f"✅ All {len(required_ports)} ports in prescribed range are available")
-        
-        if optimization_approach == "multi_objective":
-            print("Warning: Multi-objective optimization is not supported with parallel mode. Switching to single-objective.")
-            optimization_approach = "single_objective"
-        
-        from src.serving.optimization import run_parallel_trials
-        study = run_parallel_trials(
-            study, model, args.max_seconds, args.prompt_tokens, args.output_tokens, args.dataset,
-            vllm_config, STUDY_DIR, VLLM_LOGS_DIR, GUIDELLM_LOGS_DIR, STUDY_ID, gpu_ids, n_trials, args.start_port
-        )
-    else:
-        if sampler_name == "grid":
-            print(f"Will run ALL grid combinations (no n_trials limit)")
-            study.optimize(objective_function)
-        else:
-            print(f"Will run {n_trials} optimization trials")
-            study.optimize(objective_function, n_trials=n_trials)
+    # Parse GPU IDs and always use parallel workflow
+    gpu_ids = [int(gpu.strip()) for gpu in args.gpus.split(',')]
+    print(f"Using dynamic GPU scheduling with {sampler_name} sampler on GPUs: {gpu_ids}")
+    
+    # Check ALL required ports are available before starting study
+    from src.serving.utils import check_all_ports_available_for_study
+    print(f"\nChecking prescribed port range for {len(gpu_ids)} GPU(s)...")
+    print(f"Start port: {args.start_port}")
+    
+    all_available, unavailable_ports, required_ports = check_all_ports_available_for_study(gpu_ids, args.start_port)
+    print(f"Required port range: {required_ports}")
+    
+    if not all_available:
+        # NOISY ERROR - exactly as specified
+        print("\n" + "="*80)
+        print("FATAL ERROR: PORT CONFLICT DETECTED")
+        print("="*80)
+        print(f"The following ports are already in use: {unavailable_ports}")
+        print(f"Required ports for GPU trials: {required_ports}")
+        print("")
+        print("STUDY CANNOT START WITH PORT CONFLICTS.")
+        print("")
+        print("Please:")
+        print("1. Kill any processes using these ports, OR")
+        print("2. Use a different --start-port value")
+        print("="*80)
+        sys.exit(1)
+    
+    print(f"All {len(required_ports)} ports in prescribed range are available")
+    
+    # Always use the parallel workflow (works with 1 or more GPUs)
+    study = run_parallel_trials(
+        study, model, args.max_seconds, args.prompt_tokens, args.output_tokens, args.dataset,
+        vllm_config, STUDY_DIR, VLLM_LOGS_DIR, GUIDELLM_LOGS_DIR, STUDY_ID, gpu_ids, n_trials, args.start_port
+    )
 
     print("\nOptimization Results:")
     if optimization_approach == "multi_objective":

@@ -1,8 +1,5 @@
 import os
 import sys
-import subprocess
-import time
-import gc
 from src.serving.vllm_server import build_vllm_command, start_vllm_server, stop_vllm_server
 from src.serving.benchmarking import run_guidellm, parse_benchmarks
 
@@ -84,7 +81,8 @@ def run_baseline_test(model=None, max_seconds=None, prompt_tokens=None, output_t
 
     except Exception as e:
         print("Error during baseline test:", str(e), file=sys.stderr)
-        import traceback; traceback.print_exc()
+        import traceback
+        traceback.print_exc()
         return None
 
     finally:
