@@ -324,11 +324,9 @@ def main():
     
     # Check ALL required ports are available before starting study
     from src.serving.utils import check_all_ports_available_for_study
-    print(f"\nChecking prescribed port range for {len(gpu_ids)} GPU(s)...")
-    print(f"Start port: {args.start_port}")
     
     all_available, unavailable_ports, required_ports = check_all_ports_available_for_study(gpu_ids, args.start_port)
-    print(f"Required port range: {required_ports}")
+    print(f"\nChecking port availability for {len(gpu_ids)} GPU(s) starting at port {args.start_port}. Required ports: {required_ports}")
     
     if not all_available:
         # NOISY ERROR - exactly as specified
@@ -346,7 +344,7 @@ def main():
         print("="*80)
         sys.exit(1)
     
-    print(f"All {len(required_ports)} ports in prescribed range are available")
+    print(f"All {len(required_ports)} required ports are available")
     
     # Always use the parallel workflow (works with 1 or more GPUs)
     study = run_parallel_trials(
