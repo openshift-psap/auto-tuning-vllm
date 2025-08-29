@@ -1,0 +1,100 @@
+# Parameter schema definition for vLLM optimization
+# This defines all available parameters and their validation rules
+
+parameters:
+  max_num_batched_tokens:
+    type: "range"
+    data_type: "int"
+    min: 1024
+    max: 32768
+    step: 1024
+    description: "Maximum tokens processed in a single batch"
+    
+  gpu_memory_utilization:
+    type: "range"
+    data_type: "float" 
+    min: 0.70
+    max: 0.95
+    step: 0.01
+    description: "GPU memory usage ratio"
+    
+  block_size:
+    type: "list"
+    data_type: "int"
+    options: [8, 16, 32, 64, 128]
+    description: "Memory block size for attention"
+    
+  kv_cache_dtype:
+    type: "list"
+    data_type: "str"
+    options: ["auto", "fp8", "fp8_e5m2", "fp8_e4m3"]
+    description: "Key-value cache data type"
+    
+  cuda_graph_sizes:
+    type: "range"
+    data_type: "int"
+    min: 8
+    max: 16384
+    step: 256
+    description: "CUDA graph capture sizes"
+    
+  long_prefill_token_threshold:
+    type: "list"
+    data_type: "int"
+    options: [0, 256, 512, 1024, 2048, 4096, 8192]
+    description: "Threshold for long prefill tokens"
+    
+  max_seq_len_to_capture:
+    type: "list"
+    data_type: "int"
+    options: [4096, 8192, 16384]
+    description: "Maximum sequence length for CUDA graphs"
+    
+  max_num_partial_prefills:
+    type: "list"
+    data_type: "int"
+    options: [1, 2, 4, 8]
+    description: "Maximum partial prefill operations"
+    
+  compilation_config:
+    type: "list"
+    data_type: "int"
+    options: [0, 1, 2, 3]
+    description: "Compilation optimization level"
+    
+  enable_cuda_graphs:
+    type: "boolean"
+    data_type: "bool"
+    description: "Enable CUDA graph optimization"
+    
+  enable_prefix_caching:
+    type: "boolean" 
+    data_type: "bool"
+    description: "Enable prefix caching"
+    
+  guidellm_concurrency:
+    type: "range"
+    data_type: "int"
+    min: 10
+    max: 500
+    step: 10
+    description: "Number of concurrent requests for benchmarking"
+    
+  # Parallelism parameters
+  tensor_parallel_size:
+    type: "list"
+    data_type: "int"
+    options: [1, 2, 4, 8]
+    description: "Number of tensor parallel groups (GPUs for tensor parallelism)"
+    
+  pipeline_parallel_size:
+    type: "list" 
+    data_type: "int"
+    options: [1, 2, 4]
+    description: "Number of pipeline parallel stages"
+    
+  data_parallel_size:
+    type: "list"
+    data_type: "int" 
+    options: [1, 2, 4]
+    description: "Number of data parallel replicas"

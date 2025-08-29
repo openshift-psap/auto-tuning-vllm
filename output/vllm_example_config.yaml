@@ -1,0 +1,62 @@
+'# Example vLLM configuration generated from CLI parsing': null
+benchmark:
+  benchmark_type: guidellm
+  dataset: null
+  max_seconds: 300
+  model: microsoft/DialoGPT-medium
+  output_tokens: 500
+  prompt_tokens: 1000
+logging:
+  file_path: /tmp/auto-tune-vllm-logs
+  log_level: INFO
+optimization:
+  n_trials: 100
+  objective: maximize
+  sampler: tpe
+parameters:
+  block_size:
+    enabled: true
+    options:
+    - '1'
+    - '8'
+    - '16'
+  cuda_graph_sizes:
+    enabled: true
+  dtype:
+    enabled: true
+    options:
+    - auto
+    - bfloat16
+    - float
+  enforce_eager:
+    enabled: true
+  gpu_memory_utilization:
+    enabled: true
+    max: 1.0
+    min: 0.7
+    step: 0.05
+  kv_cache_dtype:
+    enabled: true
+    options:
+    - auto
+    - fp8
+    - fp8_e4m3
+  max_model_len:
+    enabled: true
+  max_num_batched_tokens:
+    enabled: true
+  max_num_seqs:
+    enabled: true
+  pipeline_parallel_size:
+    enabled: true
+    max: 2
+    min: 1
+    step: 1
+  tensor_parallel_size:
+    enabled: true
+    max: 2
+    min: 1
+    step: 1
+study:
+  database_url: postgresql://user:pass@localhost/optuna
+  name: vllm_cli_optimization

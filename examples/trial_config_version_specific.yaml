@@ -1,0 +1,101 @@
+# Version-specific trial configuration
+# This config is designed for vLLM v0.10.1.1 specifically
+# Load with: StudyConfig.from_file("trial_config_version_specific.yaml", vllm_version="0.10.1.1")
+study:
+  name: "vllm_v0_10_1_1_optimization"
+  database_url: "postgresql://tuner-user:password@localhost:5432/optuna"
+
+optimization:
+  objective: "maximize"
+  sampler: "tpe"
+  n_trials: 100
+
+benchmark:
+  benchmark_type: "guidellm"
+  model: "facebook/opt-125m"
+  max_seconds: 240
+  dataset: null
+  prompt_tokens: 750
+  output_tokens: 750
+
+logging:
+  file_path: "/tmp/auto-tune-vllm-v0-10-1-1"
+  log_level: "INFO"
+
+  database_url: "postgresql://tuner-user:password@localhost:5432/optuna"
+
+parameters:
+  # Parameters that leverage vLLM v0.10.1.1 specific defaults
+  
+  # Cache parameters (vLLM v0.10.1.1 defaults)
+  gpu_memory_utilization:
+    enabled: true
+    # v0.10.1.1 default: 0.9
+    # Optimize in tight range around default
+    min: 0.88
+    max: 0.92
+    step: 0.01
+    
+  kv_cache_dtype:
+    enabled: true
+    # v0.10.1.1 options: auto, fp8, fp8_e5m2, fp8_e4m3
+    options: ["auto", "fp8", "fp8_e5m2"]
+    
+  calculate_kv_scales:
+    enabled: true
+    # v0.10.1.1 default: False
+    # Test dynamic KV scale calculation
+    
+  prefix_caching_hash_algo:
+    enabled: true
+    # v0.10.1.1 options: builtin, sha256, sha256_cbor_64bit
+    options: ["builtin", "sha256"]
+    
+  # Model parameters (vLLM v0.10.1.1 defaults)
+  max_seq_len_to_capture:
+    enabled: true
+    # v0.10.1.1 default: 8192
+    options: [4096, 8192, 12288, 16384]
+    
+  disable_cascade_attn:
+    enabled: true
+    # v0.10.1.1 default: False
+    # Test cascade attention disable
+    
+  tokenizer_mode:
+    enabled: true
+    # v0.10.1.1 options: auto, custom, mistral, slow
+    options: ["auto", "slow"]
+    
+  # Scheduler parameters (vLLM v0.10.1.1 defaults)
+  async_scheduling:
+    enabled: true
+    # v0.10.1.1 default: False
+    # Test async vs sync scheduling
+    
+  long_prefill_token_threshold:
+    enabled: true
+    # v0.10.1.1 default: 0
+    options: [0, 256, 512, 1024]
+    
+  max_num_partial_prefills:
+    enabled: true
+    # v0.10.1.1 default: 1
+    options: [1, 2, 4]
+    
+  scheduling_policy:
+    enabled: true
+    # v0.10.1.1 options: fcfs, priority
+    options: ["fcfs", "priority"]
+    
+  # Parallel parameters (vLLM v0.10.1.1 defaults)  
+  tensor_parallel_size:
+    enabled: true
+    # v0.10.1.1 default: 1
+    # Adjust based on your hardware
+    options: [1, 2]
+    
+  disable_custom_all_reduce:
+    enabled: true
+    # v0.10.1.1 default: False
+    # Test custom all-reduce vs NCCL

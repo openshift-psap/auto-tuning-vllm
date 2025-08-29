@@ -1,0 +1,93 @@
+# Comprehensive trial configuration showcasing vLLM versioned defaults
+# This config demonstrates using many parameters with vLLM CLI defaults
+study:
+  name: "vllm_comprehensive_optimization"
+  database_url: "postgresql://tuner-user:password@localhost:5432/optuna"
+
+optimization:
+  objective: "maximize"
+  sampler: "tpe"
+  n_trials: 200
+
+benchmark:
+  benchmark_type: "guidellm"
+  model: "facebook/opt-125m"  # Smaller model for testing
+  max_seconds: 180
+  dataset: null
+  prompt_tokens: 500
+  output_tokens: 500
+
+logging:
+  file_path: "/tmp/auto-tune-vllm-comprehensive"
+  log_level: "INFO"
+
+parameters:
+  # Cache configuration parameters
+  gpu_memory_utilization:
+    enabled: true
+    # vLLM default: 0.9, optimize around it
+    min: 0.85
+    max: 0.95
+    step: 0.01
+    
+  kv_cache_dtype:
+    enabled: true
+    # vLLM CLI options: auto, fp8, fp8_e5m2, fp8_e4m3
+    # Using subset for faster optimization
+    options: ["auto", "fp8"]
+    
+  swap_space:
+    enabled: true
+    # vLLM default: 4 GB, test different values
+    min: 2
+    max: 8
+    step: 2
+    
+  # Model configuration parameters
+  max_seq_len_to_capture:
+    enabled: true
+    # vLLM default: 8192, test common values
+    options: [4096, 8192, 16384]
+    
+  dtype:
+    enabled: true
+    # vLLM CLI options for model dtype
+    options: ["auto", "bfloat16", "float16"]
+    
+  enforce_eager:
+    enabled: true
+    # vLLM default: False, test both modes
+    # Boolean parameter - will test both True/False
+    
+  # Scheduler configuration parameters  
+  max_num_batched_tokens:
+    enabled: true
+    # Schema defaults: 1024-32768, step 1024
+    # Optimize for throughput
+    min: 2048
+    max: 16384
+    step: 2048
+    
+  scheduling_policy:
+    enabled: true
+    # vLLM CLI options: fcfs, priority
+    options: ["fcfs", "priority"]
+    
+  scheduler_delay_factor:
+    enabled: true
+    # vLLM default: 0.0, test small delays
+    min: 0.0
+    max: 0.1
+    step: 0.01
+    
+  # Parallel configuration parameters
+  tensor_parallel_size:
+    enabled: true
+    # vLLM default: 1, test parallelism options
+    # Adjust based on your GPU setup
+    options: [1, 2, 4]
+    
+  data_parallel_size:
+    enabled: true
+    # vLLM default: 1, test data parallelism
+    options: [1, 2]
