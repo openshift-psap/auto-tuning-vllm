@@ -1,0 +1,56 @@
+# Example study configuration WITHOUT PostgreSQL
+# This demonstrates file-based storage and logging only
+
+study:
+  name: "vllm_optimization_no_postgres"
+  # database_url: null  # No PostgreSQL required!
+  
+  # Optional: Specify custom SQLite file location
+  # storage_file: "/tmp/my_study/optuna_study.db"
+  # If not specified, defaults to: ./optuna_studies/{study_name}/study.db
+  
+optimization:
+  # Low-latency optimization: Minimize end-to-end request latency
+  approach: "single_objective"
+  objective:
+    metric: "request_latency"  # End-to-end latency optimization
+    direction: "minimize"
+    percentile: "p95"  # Optimize for 95th percentile (SLA-friendly)
+  sampler: "tpe"
+  n_trials: 50
+  
+  # Alternative: Use preset for common configurations
+  # preset: "low_latency"
+  
+benchmark:
+  benchmark_type: "guidellm"
+  model: "facebook/opt-125m"  # Small model for testing
+  max_seconds: 180
+  dataset: null  # Use synthetic data
+  prompt_tokens: 500
+  output_tokens: 500
+  
+logging:
+  # File logging only - no PostgreSQL needed!
+  file_path: "/tmp/auto-tune-vllm-logs"
+  log_level: "INFO"
+  
+parameters:
+  max_num_batched_tokens:
+    enabled: true
+    min: 1024
+    max: 8192
+    step: 1024
+    
+  gpu_memory_utilization:
+    enabled: true
+    min: 0.85
+    max: 0.95
+    step: 0.05
+    
+  kv_cache_dtype:
+    enabled: true
+    options: ["auto", "fp8"]
+    
+  enable_cuda_graphs:
+    enabled: true

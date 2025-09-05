@@ -1,7 +1,24 @@
-vllm
-optuna
-torch
-huggingface_hub
-guidellm
-pyyaml
-requests
+optuna>=3.0.0
+ray[default]>=2.0.0
+vllm>=0.2.0
+guidellm>=0.1.0
+pyyaml>=6.0
+pydantic>=2.0.0
+typer>=0.9.0
+rich>=13.0.0
+requests>=2.28.0
+
+# Optional PostgreSQL support
+# Install with: pip install psycopg2-binary>=2.9.0
+# Only required when using PostgreSQL for study storage or logging
+
+# Optional dependencies
+# For visualization
+plotly>=5.0.0
+pandas>=2.0.0
+
+# For development
+pytest>=7.0.0
+black>=23.0.0
+isort>=5.0.0
+mypy>=1.0.0

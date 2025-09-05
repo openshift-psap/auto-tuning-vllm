@@ -1,0 +1,11 @@
+include README.md
+include LICENSE
+include pyproject.toml
+recursive-include auto_tune_vllm *.py
+recursive-include auto_tune_vllm *.yaml
+recursive-include auto_tune_vllm *.json
+recursive-include examples *.py *.yaml *.md
+recursive-include docs *.md *.rst
+exclude tests/*
+exclude .github/*
+exclude .git/*

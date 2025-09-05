@@ -1,0 +1,51 @@
+# Example study configuration with auto-generated study name
+study:
+  # name: "local_single_trial_test_3"  # <- Comment out to use auto-generation
+  # Will auto-generate unique name like: study_123456
+  # No database - will use local SQLite storage in temp folder
+  
+optimization:
+  # High-throughput optimization: Maximize token generation rate
+  approach: "single_objective"
+  objective:
+    metric: "output_tokens_per_second"  # Throughput optimization
+    direction: "maximize"
+    percentile: "median"  # Use median for stable results
+  sampler: "tpe"
+  n_trials: 1
+  
+  # Alternative: Use preset for common configurations
+  # preset: "high_throughput"
+  
+benchmark:
+  benchmark_type: "guidellm"
+  model: "RedHatAI/Qwen3-1.7B-FP8-dynamic"  # Small model for quick testing
+  max_seconds: 30                 # Short benchmark time
+  dataset: null  # Use synthetic data
+  prompt_tokens: 100   # Smaller for quick test
+  output_tokens: 100
+  rate: 10              # Low concurrency for local testing
+  
+logging:
+  file_path: "/tmp/auto-tune-vllm-local-run/logs"  # Local temp folder
+  log_level: "INFO"
+
+
+  
+parameters:
+  max_num_batched_tokens:
+    enabled: true
+    # Uses schema defaults
+    
+  gpu_memory_utilization:
+    enabled: true
+    min: 0.9
+    max: 0.95
+    step: 0.01
+    
+  kv_cache_dtype:
+    enabled: true
+    options: ["auto", "fp8"]
+    
+  enable_cuda_graphs:
+    enabled: false

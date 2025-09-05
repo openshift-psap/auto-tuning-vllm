@@ -1,0 +1,191 @@
+# Comprehensive optimization configuration examples
+# This file demonstrates all supported optimization approaches
+
+# =============================================================================
+# SINGLE OBJECTIVE OPTIMIZATION
+# =============================================================================
+
+study:
+  name: "optimization_examples"
+
+# Example 1: Maximize Throughput (most common)
+optimization:
+  approach: "single_objective"
+  objective:
+    metric: "output_tokens_per_second"  # throughput
+    direction: "maximize"
+    percentile: "median"  # or "p95", "p90", "p99"
+  sampler: "tpe"
+  n_trials: 100
+
+# Example 2: Minimize E2E Latency
+# optimization:
+#   approach: "single_objective"
+#   objective:
+#     metric: "request_latency"
+#     direction: "minimize"
+#     percentile: "p95"  # Optimize for 95th percentile latency
+#   sampler: "tpe"
+#   n_trials: 100
+
+# Example 3: Minimize TTFT (Time To First Token)
+# optimization:
+#   approach: "single_objective"
+#   objective:
+#     metric: "time_to_first_token_ms"
+#     direction: "minimize"
+#     percentile: "median"
+#   sampler: "tpe"
+#   n_trials: 100
+
+# Example 4: Minimize Inter-Token Latency
+# optimization:
+#   approach: "single_objective"
+#   objective:
+#     metric: "inter_token_latency_ms"
+#     direction: "minimize"
+#     percentile: "p95"
+#   sampler: "tpe"
+#   n_trials: 100
+
+# =============================================================================
+# MULTI-OBJECTIVE OPTIMIZATION
+# =============================================================================
+
+# Example 5: Throughput vs TTFT Trade-off
+# optimization:
+#   approach: "multi_objective"
+#   objectives:
+#     - metric: "output_tokens_per_second"
+#       direction: "maximize"
+#       percentile: "median"
+#     - metric: "time_to_first_token_ms"
+#       direction: "minimize"
+#       percentile: "p95"
+#   sampler: "nsga2"  # Recommended for multi-objective
+#   n_trials: 200
+
+# Example 6: Throughput vs E2E Latency Trade-off (current default multi-objective)
+# optimization:
+#   approach: "multi_objective"
+#   objectives:
+#     - metric: "output_tokens_per_second"
+#       direction: "maximize"
+#       percentile: "median"
+#     - metric: "request_latency"
+#       direction: "minimize"
+#       percentile: "median"
+#   sampler: "nsga2"
+#   n_trials: 200
+
+# Example 7: TTFT vs E2E Latency Trade-off
+# optimization:
+#   approach: "multi_objective"
+#   objectives:
+#     - metric: "time_to_first_token_ms"
+#       direction: "minimize"
+#       percentile: "p95"
+#     - metric: "request_latency"
+#       direction: "minimize"
+#       percentile: "p95"
+#   sampler: "nsga2"
+#   n_trials: 200
+
+# =============================================================================
+# BACKWARD COMPATIBILITY (DEPRECATED)
+# =============================================================================
+
+# The old format still works but is deprecated:
+# optimization:
+#   objective: "maximize"  # Defaults to maximizing throughput
+#   sampler: "tpe"
+#   n_trials: 100
+
+# =============================================================================
+# PRESET CONFIGURATIONS FOR COMMON USE CASES
+# =============================================================================
+
+# Example 8: High-Throughput Preset
+# optimization:
+#   preset: "high_throughput"
+#   n_trials: 100
+#   # Equivalent to:
+#   # approach: "single_objective"
+#   # objective:
+#   #   metric: "output_tokens_per_second"
+#   #   direction: "maximize"
+#   #   percentile: "median"
+
+# Example 9: Low-Latency Preset
+# optimization:
+#   preset: "low_latency"
+#   n_trials: 100
+#   # Equivalent to:
+#   # approach: "single_objective"
+#   # objective:
+#   #   metric: "request_latency"
+#   #   direction: "minimize"
+#   #   percentile: "p95"
+
+# Example 10: Balanced Preset (Throughput vs Latency)
+# optimization:
+#   preset: "balanced"
+#   n_trials: 200
+#   # Equivalent to:
+#   # approach: "multi_objective"
+#   # objectives:
+#   #   - metric: "output_tokens_per_second"
+#   #     direction: "maximize"
+#   #     percentile: "median"
+#   #   - metric: "request_latency"
+#   #     direction: "minimize"
+#   #     percentile: "median"
+
+# =============================================================================
+# CONFIGURATION NOTES
+# =============================================================================
+
+# Available metrics:
+# - output_tokens_per_second: Token generation throughput
+# - request_latency: End-to-end request latency
+# - time_to_first_token_ms: Time to first token (TTFT)
+# - inter_token_latency_ms: Inter-token latency (ITL)
+# - requests_per_second: Request throughput
+
+# Available percentiles:
+# - "median" or "p50": 50th percentile (most common)
+# - "p95": 95th percentile (good for latency SLAs)
+# - "p90": 90th percentile
+# - "p99": 99th percentile (extreme cases)
+
+# Recommended samplers:
+# - "tpe": Tree-structured Parzen Estimator (good for single objective)
+# - "nsga2": Non-dominated Sorting GA-II (best for multi-objective)
+# - "botorch": Bayesian Optimization (advanced single objective)
+# - "random": Random sampling (baseline)
+
+benchmark:
+  benchmark_type: "guidellm"
+  model: "facebook/opt-125m"
+  max_seconds: 180
+  dataset: null
+  prompt_tokens: 500
+  output_tokens: 500
+
+logging:
+  file_path: "/tmp/auto-tune-vllm-logs"
+  log_level: "INFO"
+
+parameters:
+  gpu_memory_utilization:
+    enabled: true
+    min: 0.85
+    max: 0.95
+    step: 0.05
+    
+  max_num_batched_tokens:
+    enabled: true
+    min: 1024
+    max: 8192
+    step: 1024
+

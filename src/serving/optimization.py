@@ -241,9 +241,6 @@ def run_single_trial_parallel(trial, model, max_seconds, prompt_tokens, output_t
     
     candidate_flags.extend(["--max-num-seqs", str(concurrency)])
     
-    # Add GPU specification
-    candidate_flags.extend(["--tensor-parallel-size", "1"])
-    
     # Set CUDA_VISIBLE_DEVICES for this specific GPU
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)

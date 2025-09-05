@@ -6,3 +6,24 @@ datasets/
 mlperf-inference-5.1-redhat/
 *.pyc
 __pycache__/
+.claude/
+.ruff_cache/
+.venv/
+
+# Build artifacts and packaging
+*.egg-info/
+build/
+dist/
+*.egg
+*.whl
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db

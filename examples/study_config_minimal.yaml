@@ -1,0 +1,44 @@
+# Minimal study configuration for quick testing
+# No PostgreSQL, console logging only
+
+study:
+  name: "vllm_quick_test"
+  # No database_url or storage_file specified
+  # Will default to: ./optuna_studies/vllm_quick_test/study.db
+  
+optimization:
+  # Balanced optimization: Find best throughput vs latency trade-offs
+  approach: "multi_objective"
+  objectives:
+    - metric: "output_tokens_per_second"  # Maximize throughput
+      direction: "maximize"
+      percentile: "median"
+    - metric: "request_latency"  # Minimize latency
+      direction: "minimize"
+      percentile: "median"
+  sampler: "random"  # Fast for testing (use nsga2 for real optimization)
+  n_trials: 10       # Small number for quick test
+  
+  # Alternative: Use preset for common configurations
+  # preset: "balanced"
+  
+benchmark:
+  benchmark_type: "guidellm"
+  model: "facebook/opt-125m"  # Very small model
+  max_seconds: 60             # Short benchmark
+  dataset: null
+  prompt_tokens: 100
+  output_tokens: 100
+  
+# No logging section specified - will use console logging only
+
+parameters:
+  gpu_memory_utilization:
+    enabled: true
+    min: 0.8
+    max: 0.9
+    step: 0.1  # Large step for quick test
+    
+  max_num_batched_tokens:
+    enabled: true
+    options: [1024, 2048, 4096]  # Fixed options for quick grid search

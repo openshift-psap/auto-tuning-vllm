@@ -1,0 +1,71 @@
+# vLLM CLI defaults extracted automatically
+# vLLM version: 0.10.1.1
+# Generated sections: cacheconfig, schedulerconfig, modelconfig, parallelconfig
+# This file contains default values from vLLM CLI arguments
+# Use this instead of hardcoding defaults in Python code
+
+defaults:
+  cacheconfig:
+    calculate_kv_scales: false
+    cpu_offload_gb: 0
+    gpu_memory_utilization: 0.9
+    kv_cache_dtype: auto
+    kv_sharing_fast_prefill: false
+    mamba_cache_dtype: auto
+    mamba_ssm_cache_dtype: auto
+    prefix_caching_hash_algo: builtin
+    swap_space: 4
+  modelconfig:
+    allowed_local_media_path: ''
+    config_format: auto
+    convert: auto
+    disable_async_output_proc: false
+    disable_cascade_attn: false
+    disable_sliding_window: false
+    dtype: auto
+    enable_prompt_embeds: false
+    enable_sleep_mode: false
+    enforce_eager: false
+    generation_config: auto
+    hf_overrides: {}
+    logprobs_mode: raw_logprobs
+    max_logprobs: 20
+    max_seq_len_to_capture: 8192
+    model_impl: auto
+    override_generation_config: {}
+    override_neuron_config: {}
+    rope_scaling: {}
+    runner: auto
+    skip_tokenizer_init: false
+    tokenizer_mode: auto
+    trust_remote_code: false
+  parallelconfig:
+    data_parallel_backend: mp
+    data_parallel_hybrid_lb: false
+    data_parallel_size: 1
+    disable_custom_all_reduce: false
+    enable_eplb: false
+    enable_expert_parallel: false
+    enable_multimodal_encoder_data_parallel: false
+    eplb_log_balancedness: false
+    eplb_step_interval: 3000
+    eplb_window_size: 1000
+    num_redundant_experts: 0
+    pipeline_parallel_size: 1
+    ray_workers_use_nsight: false
+    tensor_parallel_size: 1
+    worker_cls: auto
+    worker_extension_cls: ''
+  schedulerconfig:
+    async_scheduling: false
+    cuda_graph_sizes: []
+    disable_chunked_mm_input: false
+    disable_hybrid_kv_cache_manager: false
+    long_prefill_token_threshold: 0
+    max_long_partial_prefills: 1
+    max_num_partial_prefills: 1
+    num_lookahead_slots: 0
+    scheduler_cls: vllm.core.scheduler.Scheduler
+    scheduler_delay_factor: 0.0
+    scheduling_policy: fcfs
+version: 0.10.1.1
