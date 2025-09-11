@@ -1,0 +1,628 @@
+# Configuration Guide
+
+This guide provides detailed explanations of all configuration options available in auto-tune-vllm for optimizing vLLM performance.
+
+## Table of Contents
+
+1. [Configuration File Structure](#configuration-file-structure)
+2. [Study Configuration](#study-configuration)
+3. [Optimization Configuration](#optimization-configuration)
+4. [Benchmark Configuration](#benchmark-configuration)
+5. [Logging Configuration](#logging-configuration)
+6. [Parameter Configuration](#parameter-configuration)
+7. [Environment Variables](#environment-variables)
+8. [Configuration Examples](#configuration-examples)
+
+## Configuration File Structure
+
+Auto-tune-vllm uses YAML configuration files with five main sections. Each section controls a different aspect of the optimization process:
+
+- **`study`**: Defines study metadata, naming, and storage backend
+- **`optimization`**: Specifies what metrics to optimize and how
+- **`benchmark`**: Configures how performance benchmarks are executed
+- **`logging`**: Controls logging output and verbosity (optional)
+- **`parameters`**: Defines which vLLM parameters to optimize and their ranges
+
+The basic structure looks like:
+
+```yaml
+study:
+  # Study identity and storage
+  
+optimization:
+  # What to optimize and optimization strategy
+  
+benchmark:
+  # How to measure performance
+  
+logging:
+  # Where and how to log (optional)
+  
+parameters:
+  # Which vLLM parameters to tune
+```
+
+## Study Configuration
+
+The `study` section controls study identity, naming, and where optimization results are stored. This section is required in every configuration file.
+
+### Study Naming
+
+Studies need unique identifiers to track optimization progress. Auto-tune-vllm provides flexible naming options:
+
+#### `name` (string, optional)
+Specifies an explicit study name that must be unique. If a study with this name already exists, the optimization will fail unless you're resuming it. Use this when you need predictable, exact study names.
+
+#### `prefix` (string, optional)  
+Used for auto-generating unique study names in the format `{prefix}_{timestamp}`. This ensures uniqueness while providing meaningful prefixes. If omitted, defaults to "study".
+
+**Naming Rules:**
+- You cannot specify both `name` and `prefix` - choose one approach
+- If neither is specified, auto-generates names like `study_123456`
+- Explicit names (`name`) fail if the study already exists
+- Prefixed names (`prefix`) automatically create unique variants
+
+### Storage Backend
+
+Auto-tune-vllm supports two storage backends for persisting optimization results:
+
+#### `database_url` (string, optional)
+PostgreSQL connection URL for production environments. Supports concurrent optimization workers and provides robust persistence. The URL format is: `postgresql://username:password@host:port/database`
+
+#### `storage_file` (string, optional)
+Path to SQLite database file for single-machine optimization. Simpler to set up than PostgreSQL but doesn't support concurrent workers. If not specified, defaults to `./optuna_studies/{study_name}/study.db`.
+
+**Storage Rules:**
+- You cannot specify both `database_url` and `storage_file`
+- If neither is specified, uses SQLite with default file location
+- PostgreSQL is recommended for production with multiple workers
+- SQLite is suitable for development and single-worker optimization
+
+### Additional Options
+
+#### `study_prefix` (string, optional)
+Internal option for advanced study naming scenarios. Generally not needed in user configurations.
+
+#### `use_explicit_name` (boolean, optional)
+Internal flag that controls study loading behavior. Automatically set based on your naming choice.
+
+## Optimization Configuration
+
+The `optimization` section defines what performance metrics to optimize and the strategy for finding optimal parameter combinations. This section is required and controls the core optimization behavior.
+
+### Configuration Approaches
+
+Auto-tune-vllm supports three ways to configure optimization, from simple to advanced:
+
+#### Preset-Based Configuration (Recommended for Beginners)
+
+Use `preset` for common optimization scenarios:
+
+##### `preset` (string, optional)
+Pre-configured optimization strategies for typical use cases:
+
+- **`"high_throughput"`**: Maximizes token generation rate (output_tokens_per_second)
+- **`"low_latency"`**: Minimizes 95th percentile request latency  
+- **`"balanced"`**: Multi-objective optimization balancing throughput and latency
+
+When using presets, you only need to specify `n_trials`. The preset automatically configures the approach, objectives, and sampler.
+
+#### Structured Configuration (Advanced)
+
+Use `approach` and `objectives` for full control over optimization:
+
+##### `approach` (string, optional)
+Defines the optimization strategy:
+
+- **`"single_objective"`**: Optimize one metric only. Best when you have a clear primary goal.
+- **`"multi_objective"`**: Optimize multiple metrics simultaneously, finding trade-off solutions.
+
+##### `objectives` (list, required when using approach)
+List of optimization objectives. Each objective specifies:
+
+**`metric`** (string, required): The performance metric to optimize. Available metrics:
+- `output_tokens_per_second`: Token generation throughput (tokens/sec)
+- `request_latency`: End-to-end request latency (milliseconds) 
+- `time_to_first_token_ms`: Time until first token appears (milliseconds)
+- `inter_token_latency_ms`: Latency between consecutive tokens (milliseconds)
+- `requests_per_second`: Request processing throughput (requests/sec)
+
+**`direction`** (string, required): Optimization direction:
+- `"maximize"`: Increase the metric value (for throughput metrics)
+- `"minimize"`: Decrease the metric value (for latency metrics)
+
+**`percentile`** (string, optional): Which percentile of the metric to optimize:
+- `"median"` or `"p50"`: 50th percentile (most stable, default)
+- `"p95"`: 95th percentile (good for SLA optimization)
+- `"p90"`: 90th percentile (balanced approach)
+- `"p99"`: 99th percentile (extreme tail optimization)
+
+#### Legacy Configuration (Backward Compatibility)
+
+##### `objective` (string, optional) 
+Legacy single-objective format:
+- `"maximize"`: Defaults to maximizing throughput
+- `"minimize"`: Defaults to minimizing latency
+
+This format is deprecated but still supported for backward compatibility.
+
+### Optimization Algorithm Settings
+
+#### `sampler` (string, optional)
+The optimization algorithm to use. Default is "tpe":
+
+- **`"tpe"`**: Tree-structured Parzen Estimator. Best general-purpose sampler for single-objective optimization.
+- **`"nsga2"`**: Non-dominated Sorting Genetic Algorithm II. Recommended for multi-objective optimization.
+- **`"botorch"`**: Bayesian Optimization with Torch. Advanced sampler that can be faster but may get stuck in local optima.
+- **`"random"`**: Random sampling. Useful for baselines and quick testing only.
+- **`"grid"`**: Exhaustive grid search. Tests all parameter combinations (use with small parameter spaces only).
+
+#### `n_trials` (integer, required)
+Number of optimization trials to run. Each trial tests one parameter combination:
+- **Development**: 10-50 trials for quick testing
+- **Production**: 100-500 trials for thorough optimization
+- **Multi-objective**: Typically needs 2x more trials than single-objective
+
+#### `n_startup_trials` (integer, optional)
+Number of random trials to run before starting the main sampler algorithm. Only supported by some samplers (TPE, BoTorch). Helps initialize the sampler with diverse data points.
+
+### Preset Configurations Explained
+
+#### High Throughput Preset
+Optimizes for maximum token generation speed using median throughput. Best for batch processing and high-volume serving where latency is less critical.
+
+#### Low Latency Preset  
+Optimizes for minimal 95th percentile request latency. Best for interactive applications where response time matters more than maximum throughput.
+
+#### Balanced Preset
+Multi-objective optimization finding the best trade-offs between throughput and latency. Provides a Pareto front of solutions rather than a single optimum. Best when you need to balance performance characteristics.
+
+## Benchmark Configuration
+
+The `benchmark` section controls how performance measurements are conducted. This section is required and defines the workload used to evaluate different vLLM parameter combinations.
+
+### Core Benchmark Settings
+
+#### `benchmark_type` (string, optional)
+The benchmarking framework to use. Currently only "guidellm" is supported. Defaults to "guidellm".
+
+#### `model` (string, required)
+The HuggingFace model identifier to benchmark. This should match the model you plan to serve in production. Examples:
+- `"facebook/opt-125m"` (small model for testing)
+- `"Qwen/Qwen3-30B-A3B-FP8"` (production model)
+- `"microsoft/DialoGPT-medium"` (conversational model)
+
+#### `max_seconds` (integer, optional)
+Duration in seconds for each benchmark run. Longer benchmarks provide more accurate measurements but take more time. Typical values:
+- **Development**: 60-120 seconds for quick feedback
+- **Production**: 300-600 seconds for stable measurements
+Default: 300 seconds
+
+### Workload Configuration
+
+The benchmark needs a workload to test against. Auto-tune-vllm supports both synthetic data generation and real datasets.
+
+#### Synthetic Data (Recommended)
+
+##### `dataset` (null)
+Set to `null` to use synthetic data generation. This creates artificial prompts and responses based on your specifications.
+
+##### `prompt_tokens` (integer, optional)
+Base number of tokens in generated prompts. Default: 1000
+
+##### `output_tokens` (integer, optional) 
+Base number of tokens in generated responses. Default: 1000
+
+##### Advanced Synthetic Data Distribution
+
+For more realistic workloads, control the distribution of prompt and output lengths:
+
+##### `prompt_tokens_stdev` (integer, optional)
+Standard deviation for prompt token lengths. Creates variation around the base `prompt_tokens` value. Default: 128
+
+##### `prompt_tokens_min` (integer, optional)
+Minimum prompt length in tokens. Default: 256
+
+##### `prompt_tokens_max` (integer, optional)
+Maximum prompt length in tokens. Default: 1024
+
+##### `output_tokens_stdev` (integer, optional)
+Standard deviation for output token lengths. Default: 512
+
+##### `output_tokens_min` (integer, optional)
+Minimum output length in tokens. Default: 1024
+
+##### `output_tokens_max` (integer, optional)
+Maximum output length in tokens. Default: 3072
+
+#### Real Dataset Configuration
+
+##### `dataset` (string)
+Path to a real dataset file or HuggingFace dataset identifier. Supported formats:
+- Local JSONL files: `"path/to/dataset.jsonl"`
+- HuggingFace datasets: `"huggingface/dataset_name"`
+
+When using real datasets, the `prompt_tokens` and `output_tokens` settings are ignored.
+
+### Load Configuration
+
+#### `rate` (integer, optional)
+Number of concurrent requests to maintain during benchmarking. This simulates realistic server load:
+- **Light load**: 10-20 requests
+- **Moderate load**: 50-100 requests  
+- **Heavy load**: 200+ requests
+Default: 50
+
+### Advanced Options
+
+#### `processor` (string, optional)
+Separate model for request processing if different from the served model. Rarely needed - defaults to the same value as `model`.
+
+## Logging Configuration
+
+The `logging` section controls where and how detailed logging information is recorded. This section is optional - if omitted, logs are only displayed on the console.
+
+#### `file_path` (string, optional)
+Directory path where log files should be written. Auto-tune-vllm will create log files in this directory for:
+- Optimization progress and results
+- vLLM server output
+- Benchmark execution details
+- Error and debugging information
+
+If not specified, no log files are created and all output goes to the console only.
+
+#### `log_level` (string, optional)
+Controls the verbosity of logging output. Available levels:
+- **`"DEBUG"`**: Detailed debugging information, including parameter values and internal state
+- **`"INFO"`**: General information about optimization progress (default)
+- **`"WARNING"`**: Only warnings and errors
+- **`"ERROR"`**: Only error messages
+
+**Note**: File logging is recommended for production optimization runs to preserve detailed results and troubleshooting information.
+
+## Parameter Configuration
+
+The `parameters` section defines which vLLM server parameters should be optimized and the ranges or options to explore for each parameter. This section controls the parameter space that the optimization algorithm searches through.
+
+### Parameter Structure
+
+Each parameter has a common structure with required and optional fields:
+
+#### `enabled` (boolean, required)
+Controls whether this parameter should be included in optimization:
+- `true`: Include this parameter in optimization
+- `false`: Skip this parameter (use vLLM defaults)
+
+#### Parameter Type-Specific Configuration
+
+Auto-tune-vllm supports three types of parameters, each with different configuration options:
+
+### Range Parameters
+
+Range parameters define continuous or discrete numeric ranges to optimize over. Used for parameters like memory utilization or batch sizes.
+
+#### Configuration Fields:
+- **`min`** (number, optional): Minimum value to test. Uses schema default if not specified.
+- **`max`** (number, optional): Maximum value to test. Uses schema default if not specified.  
+- **`step`** (number, optional): Step size between values. Uses schema default if not specified.
+
+The optimizer will test values between `min` and `max` in increments of `step`. For floating-point parameters, the step can be a decimal value.
+
+### List Parameters  
+
+List parameters define categorical choices from a fixed set of options. Used for parameters like data types or scheduling policies.
+
+#### Configuration Fields:
+- **`options`** (array, optional): List of valid values to test. Uses schema defaults if not specified.
+
+The optimizer will test each value in the options list.
+
+### Boolean Parameters
+
+Boolean parameters test both true and false values. Used for feature flags and enable/disable options.
+
+#### Configuration Fields:
+No additional configuration needed - automatically tests both `true` and `false` values.
+
+### Available Parameters Reference
+
+Auto-tune-vllm supports optimization of 27+ vLLM parameters across different functional categories:
+
+### Memory & Cache Parameters
+
+#### `gpu_memory_utilization` (range)
+**Type**: Float, range 0.90-0.95, step 0.01  
+**Description**: Controls what fraction of GPU memory vLLM can use. Values below 0.9 are not recommended as they significantly reduce performance. Higher values allow larger batches but risk out-of-memory errors. Most critical parameter for performance.
+
+#### `swap_space` (range)  
+**Type**: Integer, range 2-8 GB, step 2  
+**Description**: Amount of CPU memory to use for swapping GPU memory when needed. Helps with memory pressure but adds latency.
+
+#### `block_size` (list)
+**Type**: Integer, options [8, 16, 32, 64, 128]  
+**Description**: Memory block size for attention computation. Affects memory efficiency and performance. Smaller blocks use memory more efficiently.
+
+#### `kv_cache_dtype` (list)
+**Type**: String, options ["auto", "fp8", "fp8_e5m2", "fp8_e4m3"]  
+**Description**: Data type for key-value cache storage. FP8 options save memory but may reduce quality slightly.
+
+### Model & Computation Parameters
+
+#### `dtype` (list)
+**Type**: String, options ["auto", "bfloat16", "float16"]  
+**Description**: Model weight data type. Lower precision saves memory and increases speed but may affect quality.
+
+#### `enforce_eager` (boolean)
+**Type**: Boolean  
+**Description**: When enabled, disables CUDA graph optimization. May reduce latency for small batches but hurts throughput.
+
+#### `max_seq_len_to_capture` (list)
+**Type**: Integer, options [4096, 8192, 16384]  
+**Description**: Maximum sequence length for CUDA graph capture. Longer sequences need more memory but enable graph optimization for longer inputs.
+
+#### `compilation_config` (list)  
+**Type**: Integer, options [0, 1, 2, 3]  
+**Description**: Compilation optimization level. Higher levels may improve performance but increase startup time.
+
+### Batching & Scheduling Parameters
+
+#### `max_num_batched_tokens` (range)
+**Type**: Integer, range 1024-32768, step 1024  
+**Description**: Maximum total tokens that can be processed in a single batch. Critical parameter - larger values increase throughput but require more memory.
+
+#### `scheduling_policy` (list)
+**Type**: String, options ["fcfs", "priority"]  
+**Description**: Request scheduling algorithm. FCFS (first-come-first-served) is simpler, priority scheduling allows request prioritization.
+
+#### `scheduler_delay_factor` (range)
+**Type**: Float, range 0.0-0.1, step 0.01  
+**Description**: Artificial delay factor in scheduler. Small values can improve batching efficiency by waiting for more requests.
+
+#### `max_num_partial_prefills` (list)
+**Type**: Integer, options [1, 2, 4, 8]  
+**Description**: Maximum number of partial prefill operations to process concurrently. Affects prefill scheduling efficiency.
+
+### CUDA Graph Parameters
+
+#### `enable_cuda_graphs` (boolean)
+**Type**: Boolean  
+**Description**: Enables CUDA graph optimization for faster execution. Usually improves throughput but may increase memory usage and latency for small batches.
+
+#### `cuda_graph_sizes` (range)
+**Type**: Integer, range 8-16384, step 256  
+**Description**: Batch sizes to capture in CUDA graphs. Affects which batch sizes can benefit from graph optimization.
+
+#### `long_prefill_token_threshold` (list)
+**Type**: Integer, options [0, 256, 512, 1024, 2048, 4096, 8192]  
+**Description**: Token count threshold for considering a prefill "long". Affects scheduling decisions for mixed workloads.
+
+### Parallelism Parameters
+
+#### `tensor_parallel_size` (list)
+**Type**: Integer, options [1, 2, 4, 8]  
+**Description**: Number of GPUs for tensor parallelism. Splits model layers across GPUs. Must divide your available GPU count.
+
+#### `pipeline_parallel_size` (list)
+**Type**: Integer, options [1, 2, 4]  
+**Description**: Number of pipeline parallel stages. Splits model depth across GPUs. Used for very large models.
+
+#### `data_parallel_size` (list)
+**Type**: Integer, options [1, 2, 4]  
+**Description**: Number of data parallel replicas. Runs multiple independent model copies. Simple but memory-intensive scaling.
+
+### Caching Parameters
+
+#### `enable_prefix_caching` (boolean)
+**Type**: Boolean  
+**Description**: Enables caching of prompt prefixes to speed up repeated similar requests. Beneficial for conversational workloads.
+
+### Benchmark-Specific Parameters
+
+#### `guidellm_concurrency` (range)
+**Type**: Integer, range 10-500, step 10  
+**Description**: Controls benchmark load generation concurrency. Not a vLLM parameter - affects how the benchmark is conducted.
+
+### Parameter Configuration Guidelines
+
+#### Schema Defaults
+If you don't specify `min`, `max`, `step`, or `options` for a parameter, auto-tune-vllm uses built-in schema defaults based on typical vLLM usage patterns.
+
+#### Parameter Dependencies
+Some parameters interact with each other:
+- `tensor_parallel_size * pipeline_parallel_size * data_parallel_size` must not exceed your GPU count
+- `max_num_batched_tokens` should be compatible with your GPU memory (`gpu_memory_utilization`)
+- `enable_cuda_graphs` and `enforce_eager` are mutually exclusive
+
+#### Performance Impact
+Parameters have different performance impact levels:
+- **High impact**: `gpu_memory_utilization`, `max_num_batched_tokens`, `kv_cache_dtype`
+- **Medium impact**: `enable_cuda_graphs`, `block_size`, `dtype`  
+- **Low impact**: `scheduler_delay_factor`, `compilation_config`
+
+Start with high-impact parameters for initial optimization, then add medium and low-impact parameters for fine-tuning.
+
+## Environment Variables
+
+Auto-tune-vllm configuration files support environment variable expansion, allowing you to externalize sensitive information and environment-specific settings.
+
+### Variable Expansion Syntax
+
+Environment variables are referenced using `${VARIABLE_NAME}` syntax within YAML values:
+
+#### Basic Expansion: `${VAR_NAME}`
+Expands to the environment variable value, or an empty string if the variable is not set.
+
+#### Default Values: `${VAR_NAME:-default_value}`  
+Expands to the environment variable value if set, otherwise uses the provided default value.
+
+### Usage Patterns
+
+#### Database Credentials
+Keep database passwords out of configuration files:
+```yaml
+study:
+  database_url: "postgresql://user:${POSTGRES_PASSWORD}@localhost:5432/optuna"
+```
+
+#### Environment-Specific Settings
+Use different log levels per environment:
+```yaml
+logging:
+  log_level: "${LOG_LEVEL:-INFO}"
+```
+
+#### Model Configuration
+Allow model selection via environment:
+```yaml
+benchmark:
+  model: "${MODEL_NAME:-facebook/opt-125m}"
+```
+
+### Common Environment Variables
+
+These environment variables are commonly used with auto-tune-vllm:
+
+- **`POSTGRES_PASSWORD`**: Database password for PostgreSQL storage
+- **`DATABASE_URL`**: Complete database connection URL  
+- **`LOG_LEVEL`**: Logging verbosity (DEBUG/INFO/WARNING/ERROR)
+- **`LOG_PATH`**: Directory for log files
+- **`MODEL_NAME`**: HuggingFace model identifier
+- **`BENCHMARK_DURATION`**: Benchmark runtime in seconds
+
+Set these in your shell or deployment environment before running auto-tune-vllm.
+
+## Configuration Examples
+
+### Basic Development Configuration
+
+A minimal configuration for quick testing and development:
+
+```yaml
+study:
+  prefix: "dev_test"
+
+optimization:
+  preset: "high_throughput"
+  n_trials: 10
+
+benchmark:
+  model: "facebook/opt-125m"
+  max_seconds: 60
+  dataset: null
+  prompt_tokens: 100
+  output_tokens: 100
+
+parameters:
+  gpu_memory_utilization:
+    enabled: true
+  max_num_batched_tokens:
+    enabled: true
+```
+
+### Production Configuration
+
+A comprehensive production setup with PostgreSQL storage and multi-objective optimization:
+
+```yaml
+study:
+  name: "production_optimization_v1"
+  database_url: "postgresql://tuner:${POSTGRES_PASSWORD}@localhost:5432/optuna"
+
+optimization:
+  approach: "multi_objective"
+  objectives:
+    - metric: "output_tokens_per_second"
+      direction: "maximize"
+      percentile: "median"
+    - metric: "request_latency"
+      direction: "minimize"
+      percentile: "p95"
+  sampler: "nsga2"
+  n_trials: 200
+
+benchmark:
+  model: "Qwen/Qwen3-30B-A3B-FP8"
+  max_seconds: 300
+  dataset: null
+  prompt_tokens: 1000
+  output_tokens: 1000
+  rate: 100
+
+logging:
+  file_path: "/var/log/auto-tune-vllm"
+  log_level: "INFO"
+
+parameters:
+  gpu_memory_utilization:
+    enabled: true
+    min: 0.85
+    max: 0.95
+    step: 0.01
+  max_num_batched_tokens:
+    enabled: true
+  kv_cache_dtype:
+    enabled: true
+    options: ["auto", "fp8"]
+  enable_cuda_graphs:
+    enabled: true
+```
+
+### SQLite-Only Configuration  
+
+A file-based configuration without PostgreSQL requirements:
+
+```yaml
+study:
+  name: "local_optimization"
+  storage_file: "/tmp/optimization/study.db"
+
+optimization:
+  preset: "balanced"
+  n_trials: 50
+
+benchmark:
+  model: "facebook/opt-125m"
+  max_seconds: 120
+  dataset: null
+
+logging:
+  file_path: "/tmp/optimization/logs"
+  log_level: "INFO"
+
+parameters:
+  gpu_memory_utilization:
+    enabled: true
+  max_num_batched_tokens:
+    enabled: true
+  kv_cache_dtype:
+    enabled: true
+```
+
+---
+
+## Configuration Validation
+
+Before running optimization, validate your configuration file:
+
+```bash
+auto-tune-vllm validate --config your_config.yaml
+```
+
+The validation checks:
+- YAML syntax correctness
+- Required field presence  
+- Parameter range and option validity
+- Optimization configuration consistency
+- Environment variable expansion
+- Study naming conflicts
+
+## Best Practices
+
+1. **Start simple**: Begin with preset configurations before customizing
+2. **Use meaningful names**: Choose descriptive study names for production
+3. **Choose appropriate storage**: PostgreSQL for production, SQLite for development
+4. **Scale trials appropriately**: 10-50 for development, 100+ for production
+5. **Select relevant percentiles**: p95 for SLAs, median for general optimization  
+6. **Enable file logging**: Essential for troubleshooting and result analysis
+7. **Secure credentials**: Use environment variables for sensitive information
+8. **Start with high-impact parameters**: Focus on memory and batching parameters first

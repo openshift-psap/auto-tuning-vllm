@@ -39,27 +39,11 @@ auto-tune-vllm logs --study-id 42 --trial-number 15
 auto-tune-vllm resume --study-id 42
 ```
 
-#### Python API
-```python
-import asyncio
-from auto_tune_vllm import StudyController, StudyConfig, RayExecutionBackend
-
-async def main():
-    config = StudyConfig.from_file("study_config.yaml") 
-    backend = RayExecutionBackend({"num_gpus": 1, "num_cpus": 4})
-    
-    controller = StudyController(backend, study, config)
-    await controller.run_optimization(n_trials=100)
-
-asyncio.run(main())
-```
 
 ## Documentation
 
 - [Ray Cluster Setup](docs/ray_cluster_setup.md) - **Important for distributed optimization**
 - [Configuration Reference](docs/configuration.md) 
-- [API Documentation](docs/api.md)
-- [Custom Benchmarks](docs/custom_benchmarks.md)
 
 ## Requirements
 
