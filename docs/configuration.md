@@ -324,122 +324,38 @@ Boolean parameters test both true and false values. Used for feature flags and e
 #### Configuration Fields:
 No additional configuration needed - automatically tests both `true` and `false` values.
 
-### Available Parameters Reference
+### Available Parameters
 
-Auto-tune-vllm supports optimization of 27+ vLLM parameters across different functional categories:
+Auto-tune-vllm supports optimization of 27+ vLLM server parameters. For detailed descriptions of each parameter, run:
 
-### Memory & Cache Parameters
+```bash
+vllm serve --help
+```
 
-#### `gpu_memory_utilization` (range)
-**Type**: Float, range 0.90-0.95, step 0.01  
-**Description**: Controls what fraction of GPU memory vLLM can use. Values below 0.9 are not recommended as they significantly reduce performance. Higher values allow larger batches but risk out-of-memory errors. Most critical parameter for performance.
+The available parameters include:
 
-#### `swap_space` (range)  
-**Type**: Integer, range 2-8 GB, step 2  
-**Description**: Amount of CPU memory to use for swapping GPU memory when needed. Helps with memory pressure but adds latency.
-
-#### `block_size` (list)
-**Type**: Integer, options [8, 16, 32, 64, 128]  
-**Description**: Memory block size for attention computation. Affects memory efficiency and performance. Smaller blocks use memory more efficiently.
-
-#### `kv_cache_dtype` (list)
-**Type**: String, options ["auto", "fp8", "fp8_e5m2", "fp8_e4m3"]  
-**Description**: Data type for key-value cache storage. FP8 options save memory but may reduce quality slightly.
-
-### Model & Computation Parameters
-
-#### `dtype` (list)
-**Type**: String, options ["auto", "bfloat16", "float16"]  
-**Description**: Model weight data type. Lower precision saves memory and increases speed but may affect quality.
-
-#### `enforce_eager` (boolean)
-**Type**: Boolean  
-**Description**: When enabled, disables CUDA graph optimization. May reduce latency for small batches but hurts throughput.
-
-#### `max_seq_len_to_capture` (list)
-**Type**: Integer, options [4096, 8192, 16384]  
-**Description**: Maximum sequence length for CUDA graph capture. Longer sequences need more memory but enable graph optimization for longer inputs.
-
-#### `compilation_config` (list)  
-**Type**: Integer, options [0, 1, 2, 3]  
-**Description**: Compilation optimization level. Higher levels may improve performance but increase startup time.
-
-### Batching & Scheduling Parameters
-
-#### `max_num_batched_tokens` (range)
-**Type**: Integer, range 1024-32768, step 1024  
-**Description**: Maximum total tokens that can be processed in a single batch. Critical parameter - larger values increase throughput but require more memory.
-
-#### `scheduling_policy` (list)
-**Type**: String, options ["fcfs", "priority"]  
-**Description**: Request scheduling algorithm. FCFS (first-come-first-served) is simpler, priority scheduling allows request prioritization.
-
-#### `scheduler_delay_factor` (range)
-**Type**: Float, range 0.0-0.1, step 0.01  
-**Description**: Artificial delay factor in scheduler. Small values can improve batching efficiency by waiting for more requests.
-
-#### `max_num_partial_prefills` (list)
-**Type**: Integer, options [1, 2, 4, 8]  
-**Description**: Maximum number of partial prefill operations to process concurrently. Affects prefill scheduling efficiency.
-
-### CUDA Graph Parameters
-
-#### `enable_cuda_graphs` (boolean)
-**Type**: Boolean  
-**Description**: Enables CUDA graph optimization for faster execution. Usually improves throughput but may increase memory usage and latency for small batches.
-
-#### `cuda_graph_sizes` (range)
-**Type**: Integer, range 8-16384, step 256  
-**Description**: Batch sizes to capture in CUDA graphs. Affects which batch sizes can benefit from graph optimization.
-
-#### `long_prefill_token_threshold` (list)
-**Type**: Integer, options [0, 256, 512, 1024, 2048, 4096, 8192]  
-**Description**: Token count threshold for considering a prefill "long". Affects scheduling decisions for mixed workloads.
-
-### Parallelism Parameters
-
-#### `tensor_parallel_size` (list)
-**Type**: Integer, options [1, 2, 4, 8]  
-**Description**: Number of GPUs for tensor parallelism. Splits model layers across GPUs. Must divide your available GPU count.
-
-#### `pipeline_parallel_size` (list)
-**Type**: Integer, options [1, 2, 4]  
-**Description**: Number of pipeline parallel stages. Splits model depth across GPUs. Used for very large models.
-
-#### `data_parallel_size` (list)
-**Type**: Integer, options [1, 2, 4]  
-**Description**: Number of data parallel replicas. Runs multiple independent model copies. Simple but memory-intensive scaling.
-
-### Caching Parameters
-
-#### `enable_prefix_caching` (boolean)
-**Type**: Boolean  
-**Description**: Enables caching of prompt prefixes to speed up repeated similar requests. Beneficial for conversational workloads.
-
-### Benchmark-Specific Parameters
-
-#### `guidellm_concurrency` (range)
-**Type**: Integer, range 10-500, step 10  
-**Description**: Controls benchmark load generation concurrency. Not a vLLM parameter - affects how the benchmark is conducted.
+**Memory & Cache**: `gpu_memory_utilization`, `swap_space`, `block_size`, `kv_cache_dtype`  
+**Model & Computation**: `dtype`, `enforce_eager`, `max_seq_len_to_capture`, `compilation_config`  
+**Batching & Scheduling**: `max_num_batched_tokens`, `scheduling_policy`, `scheduler_delay_factor`, `max_num_partial_prefills`  
+**CUDA Graphs**: `enable_cuda_graphs`, `cuda_graph_sizes`, `long_prefill_token_threshold`  
+**Parallelism**: `tensor_parallel_size`, `pipeline_parallel_size`, `data_parallel_size`  
+**Caching**: `enable_prefix_caching`
 
 ### Parameter Configuration Guidelines
 
 #### Schema Defaults
 If you don't specify `min`, `max`, `step`, or `options` for a parameter, auto-tune-vllm uses built-in schema defaults based on typical vLLM usage patterns.
 
-#### Parameter Dependencies
-Some parameters interact with each other:
-- `tensor_parallel_size * pipeline_parallel_size * data_parallel_size` must not exceed your GPU count
-- `max_num_batched_tokens` should be compatible with your GPU memory (`gpu_memory_utilization`)
-- `enable_cuda_graphs` and `enforce_eager` are mutually exclusive
+#### Important Notes
+- **`gpu_memory_utilization`**: Should not go below 0.9 as it significantly reduces performance
+- **Parallelism parameters**: `tensor_parallel_size * pipeline_parallel_size * data_parallel_size` must not exceed your GPU count
+- **Graph optimization**: `enable_cuda_graphs` and `enforce_eager` are mutually exclusive
 
 #### Performance Impact
-Parameters have different performance impact levels:
+Focus on high-impact parameters first:
 - **High impact**: `gpu_memory_utilization`, `max_num_batched_tokens`, `kv_cache_dtype`
 - **Medium impact**: `enable_cuda_graphs`, `block_size`, `dtype`  
 - **Low impact**: `scheduler_delay_factor`, `compilation_config`
-
-Start with high-impact parameters for initial optimization, then add medium and low-impact parameters for fine-tuning.
 
 ## Environment Variables
 
