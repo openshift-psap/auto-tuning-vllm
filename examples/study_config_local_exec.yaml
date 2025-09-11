@@ -6,11 +6,12 @@ study:
   
 optimization:
   # High-throughput optimization: Maximize token generation rate
-  approach: "single_objective"
+  approach: "multi_objective"
   objective:
     metric: "output_tokens_per_second"  # Throughput optimization
     direction: "maximize"
-    percentile: "median"  # Use median for stable results
+    percentile: "mean"  # Use median for stable results
+  
   sampler: "tpe"
   n_trials: 1
   
@@ -35,7 +36,7 @@ logging:
 parameters:
   max_num_batched_tokens:
     enabled: true
-    # Uses schema defaults
+    # Uses schema defaults: min=1024, max=32768, step=1024
     
   gpu_memory_utilization:
     enabled: true
@@ -43,9 +44,43 @@ parameters:
     max: 0.95
     step: 0.01
     
+  block_size:
+    enabled: true
+    # Uses schema defaults: [8, 16, 32, 64, 128]
+    
   kv_cache_dtype:
     enabled: true
     options: ["auto", "fp8"]
     
+  cuda_graph_sizes:
+    enabled: true
+    min: 8
+    max: 8192
+    step: 128
+    
+  long_prefill_token_threshold:
+    enabled: true
+    # Uses schema defaults: [0, 256, 512, 1024, 2048, 4096, 8192, 11500]
+    
+  max_seq_len_to_capture:
+    enabled: true
+    options: [4096, 8192, 12288]
+    
+  max_num_partial_prefills:
+    enabled: true
+    # Uses schema defaults: [1, 2, 4, 8]
+    
+  compilation_config:
+    enabled: false
+    # Available: [0, 1, 2, 3] - disabled for stability
+    
   enable_cuda_graphs:
     enabled: false
+    
+  enable_prefix_caching:
+    enabled: true
+    # Boolean parameter - will test both true/false
+    
+  preemption_mode:
+    enabled: false
+    # Available: ["recompute", "swap"] - disabled for local testing

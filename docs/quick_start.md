@@ -48,7 +48,30 @@ auto-tune-vllm --help
 Start from `examples/study_config_local_exec.yaml`:
 - Set/confirm the study name and model
 - Choose the optimization objective(s) (e.g., throughput)
-- Adjust parameter ranges for tunables you want to explore
+- Enable/disable parameters you want to tune
+
+**Parameter Configuration Approach:**
+- All available parameters are defined in `auto_tune_vllm/schemas/parameter_schema.yaml`
+- The schema defines valid ranges, options, and data types for each parameter
+- In your study config, you only need to specify:
+  - `enabled: true/false` - whether to tune this parameter
+  - Optional overrides (e.g., custom `min`, `max`, `options`) - otherwise uses schema defaults
+- Example:
+  ```yaml
+  parameters:
+    max_num_batched_tokens:
+      enabled: true  # Uses schema defaults: min=1024, max=32768, step=1024
+    
+    gpu_memory_utilization:
+      enabled: true
+      min: 0.9       # Override schema default
+      max: 0.95      # Override schema default
+      step: 0.01
+    
+    kv_cache_dtype:
+      enabled: true
+      options: ["auto", "fp8"]  # Subset of schema options
+  ```
 
 ### 4) Validate Configuration
 

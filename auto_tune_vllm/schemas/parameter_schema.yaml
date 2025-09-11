@@ -41,13 +41,13 @@ parameters:
   long_prefill_token_threshold:
     type: "list"
     data_type: "int"
-    options: [0, 256, 512, 1024, 2048, 4096, 8192]
+    options: [0, 256, 512, 1024, 2048, 4096, 8192, 11500]
     description: "Threshold for long prefill tokens"
     
   max_seq_len_to_capture:
     type: "list"
     data_type: "int"
-    options: [4096, 8192, 16384]
+    options: [4096, 8192, 12288, 16384]
     description: "Maximum sequence length for CUDA graphs"
     
   max_num_partial_prefills:
@@ -71,6 +71,12 @@ parameters:
     type: "boolean" 
     data_type: "bool"
     description: "Enable prefix caching"
+    
+  preemption_mode:
+    type: "list"
+    data_type: "str"
+    options: ["recompute", "swap"]
+    description: "Memory preemption strategy when running out of memory"
     
   guidellm_concurrency:
     type: "range"
