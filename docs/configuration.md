@@ -337,7 +337,7 @@ The available parameters include:
 **Memory & Cache**: `gpu_memory_utilization`, `swap_space`, `block_size`, `kv_cache_dtype`  
 **Model & Computation**: `dtype`, `enforce_eager`, `max_seq_len_to_capture`, `compilation_config`  
 **Batching & Scheduling**: `max_num_batched_tokens`, `scheduling_policy`, `scheduler_delay_factor`, `max_num_partial_prefills`  
-**CUDA Graphs**: `enable_cuda_graphs`, `cuda_graph_sizes`, `long_prefill_token_threshold`  
+**CUDA Graphs**: `cuda_graph_sizes`, `long_prefill_token_threshold`  
 **Parallelism**: `tensor_parallel_size`, `pipeline_parallel_size`, `data_parallel_size`  
 **Caching**: `enable_prefix_caching`
 
@@ -349,12 +349,11 @@ If you don't specify `min`, `max`, `step`, or `options` for a parameter, auto-tu
 #### Important Notes
 - **`gpu_memory_utilization`**: Should not go below 0.9 as it significantly reduces performance
 - **Parallelism parameters**: `tensor_parallel_size * pipeline_parallel_size * data_parallel_size` must not exceed your GPU count
-- **Graph optimization**: `enable_cuda_graphs` and `enforce_eager` are mutually exclusive
 
 #### Performance Impact
 Focus on high-impact parameters first:
 - **High impact**: `gpu_memory_utilization`, `max_num_batched_tokens`, `kv_cache_dtype`
-- **Medium impact**: `enable_cuda_graphs`, `block_size`, `dtype`  
+- **Medium impact**: `block_size`, `dtype`  
 - **Low impact**: `scheduler_delay_factor`, `compilation_config`
 
 ## Environment Variables
@@ -479,8 +478,6 @@ parameters:
   kv_cache_dtype:
     enabled: true
     options: ["auto", "fp8"]
-  enable_cuda_graphs:
-    enabled: true
 ```
 
 ### SQLite-Only Configuration  
