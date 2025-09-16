@@ -45,10 +45,47 @@ auto-tune-vllm --help
 
 ### 3) Configure the Study
 
-Start from `examples/study_config_local_exec.yaml`:
+Start from [`examples/study_config_local_exec.yaml`](../examples/study_config_local_exec.yaml) for a full example configuration file.
+
+Key configuration areas:
 - Set/confirm the study name and model ([Study Configuration](configuration.md#study-configuration))
 - Choose the optimization objective(s) (e.g., throughput) ([Optimization Configuration](configuration.md#optimization-configuration))
 - Adjust parameter ranges for tunables you want to explore ([Parameter Configuration](configuration.md#parameter-configuration))
+
+Here's what a basic configuration looks like:
+
+```yaml
+# Basic study configuration
+study:
+  # name: "my_optimization_study"  # Optional: auto-generates if omitted
+
+optimization:
+  preset: "high_throughput"  # Use preset for common scenarios
+  n_trials: 200             # Number of optimization trials
+
+benchmark:
+  benchmark_type: "guidellm"
+  model: "RedHatAI/Qwen3-1.7B-FP8-dynamic"
+  max_seconds: 240          # Benchmark duration per trial
+  rate: 30                  # Request rate (req/sec)
+  prompt_tokens: 2000       # Input length
+  output_tokens: 2000       # Output length
+
+logging:
+  file_path: "/tmp/auto-tune-vllm-local-run/logs"
+  log_level: "INFO"
+
+parameters:
+  gpu_memory_utilization:
+    enabled: true
+    min: 0.9
+    max: 0.95
+  kv_cache_dtype:
+    enabled: true
+    options: ["auto", "fp8"]
+```
+
+
 
 #### Using Optimization Presets (Recommended)
 
