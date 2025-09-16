@@ -82,7 +82,7 @@ class ObjectiveConfig:
     
     metric: str  # "output_tokens_per_second", "request_latency", etc.
     direction: str  # "maximize" or "minimize"
-    percentile: str = "median"  # "median", "p50", "p95", "p90", "p99"
+    percentile: str = "median"  # "median", "p50", "p95", "p90", "p99", "mean"
     
     def __post_init__(self):
         """Validate objective configuration."""
@@ -91,7 +91,7 @@ class ObjectiveConfig:
             "inter_token_latency_ms", "requests_per_second"
         }
         valid_directions = {"maximize", "minimize"}
-        valid_percentiles = {"median", "p50", "p95", "p90", "p99"}
+        valid_percentiles = {"median", "p50", "p95", "p90", "p99", "mean"}
         
         if self.metric not in valid_metrics:
             raise ValueError(f"Invalid metric '{self.metric}'. Valid options: {valid_metrics}")
