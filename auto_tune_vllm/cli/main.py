@@ -69,7 +69,7 @@ def optimize_command(
     config: str = typer.Option(..., "--config", "-c", help="Study configuration file"),
     backend: str = typer.Option("ray", "--backend", "-b", help="Execution backend: 'ray' (only supported option)"),
     n_trials: Optional[int] = typer.Option(None, "--trials", "-n", help="Number of trials (overrides config)"),
-    max_concurrent: Optional[int] = typer.Option(None, "--max-concurrent", help="Max concurrent trials"),
+    max_concurrent: Optional[int] = typer.Option(None, "--max-concurrent", help="REQUIRED: Max concurrent trials (1=single GPU, 2=dual GPU, etc.)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose logging"),
     create_db: bool = typer.Option(False, "--create-db", help="Create database if it doesn't exist"),
     start_ray_head: bool = typer.Option(False, "--start-ray-head", help="Start Ray head if no cluster is found"),
@@ -137,11 +137,14 @@ def optimize_command(
             raise typer.Exit(1)
         
         # Run optimization
+        # Use CLI value or fall back to YAML config
+        final_max_concurrent = max_concurrent or study_config.optimization.max_concurrent
+        
         run_optimization_sync(
             execution_backend, 
             study_config, 
             n_trials, 
-            max_concurrent,
+            final_max_concurrent,
             create_db
         )
         
@@ -571,7 +574,7 @@ def resume_command(
     backend: str = typer.Option("ray", "--backend", "-b", help="Execution backend: 'ray' (only supported option)"),
     n_trials: Optional[int] = typer.Option(None, "--trials", "-n", help="Number of additional trials to run"),
     n_total_trials: Optional[int] = typer.Option(None, "--total-trials", help="Total number of trials to reach (overrides config)"),
-    max_concurrent: Optional[int] = typer.Option(None, "--max-concurrent", help="Max concurrent trials"),
+    max_concurrent: Optional[int] = typer.Option(None, "--max-concurrent", help="REQUIRED: Max concurrent trials (1=single GPU, 2=dual GPU, etc.)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose logging"),
     start_ray_head: bool = typer.Option(False, "--start-ray-head", help="Start Ray head if no cluster is found"),
     python_executable: Optional[str] = typer.Option(None, "--python-executable", help="Explicit Python executable path for Ray workers"),
@@ -620,7 +623,9 @@ def resume_command(
             raise typer.Exit(1)
         
         # Resume study
-        resume_study_sync(execution_backend, study_config, n_trials, n_total_trials, max_concurrent)
+        # Use CLI value or fall back to YAML config
+        final_max_concurrent = max_concurrent or study_config.optimization.max_concurrent
+        resume_study_sync(execution_backend, study_config, n_trials, n_total_trials, final_max_concurrent)
         
     except Exception as e:
         console.print(f"[bold red]Resume failed: {e}[/bold red]")

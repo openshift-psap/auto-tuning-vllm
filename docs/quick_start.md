@@ -121,7 +121,7 @@ parameters:
 ```
 
 **To customize optimization ranges** (for better results after initial studies):
-- Edit `auto_tune_vllm/schemas/v0_10_1_1.yaml` 
+- Edit `auto_tune_vllm/schemas/v0_10_1_1.yaml` or `auto_tune_vllm/schemas/v0_10_0_0.yaml`
 - Narrow ranges around promising values from previous runs
 - **Don't change the `default` values** - only adjust `min`/`max`/`options`
 
@@ -147,7 +147,8 @@ Use an existing Ray cluster (recommended if one is already running):
 ```bash
 auto-tune-vllm optimize \
   --config examples/study_config_local_exec.yaml \
-  --venv-path "$(pwd)/venv"
+  --venv-path "$(pwd)/venv" \
+  --max-concurrent <gpu_count>
 ```
 
 Start a new Ray head locally (when no cluster is running):
@@ -156,6 +157,7 @@ Start a new Ray head locally (when no cluster is running):
 auto-tune-vllm optimize \
   --config examples/study_config_local_exec.yaml \
   --venv-path "$(pwd)/venv" \
+  --max-concurrent <gpu_count> \
   --start-ray-head
 ```
 
@@ -177,7 +179,7 @@ auto-tune-vllm logs --study-id <your_study_id> --log-path ./logs
 If you configured PostgreSQL logging:
 
 ```bash
-auto-tune-vllm logs --study-id <your_study_id> --database-url postgresql://user:pass@host:5432/db
+auto-tune-vllm logs --study-name <your_study_name> --database-url postgresql://user:pass@host:5432/db
 ```
 
 > See [Logging Configuration](configuration.md#logging-configuration) for detailed logging options.
@@ -221,6 +223,7 @@ You can now explore optimization history, parameter importance, and parallel coo
     ray stop --force
     ray start --head --dashboard-host=0.0.0.0
     ```
+- **Important**: Add `--max-concurrent <gpu_count>` or set `max_concurrent: <gpu_count>` in your YAML config.
 
 ### Next Steps
 

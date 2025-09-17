@@ -9,7 +9,7 @@ class BenchmarkConfig:
     """Configuration for benchmark execution."""
     
     benchmark_type: str = "guidellm"  # "guidellm" or custom provider name
-    model: str = "Qwen/Qwen3-30B-A3B-FP8"
+    model: str = "RedHatAI/Qwen3-30B-A3B-FP8-dynamic"
     max_seconds: int = 300
     dataset: Optional[str] = None  # HF dataset or file path
     prompt_tokens: int = 1000  # For synthetic data

@@ -368,7 +368,7 @@ class StudyController:
         for values in search_space.values():
             size *= len(values)
         return size
-    
+        
     def run_optimization(
         self, 
         n_trials: Optional[int] = None,
@@ -387,7 +387,16 @@ class StudyController:
             Completed Optuna study
         """
         total_trials = n_trials or self.config.optimization.n_trials
-        max_concurrent = max_concurrent or float('inf')
+        
+        # Require explicit concurrency specification
+        if max_concurrent is None:
+            raise ValueError(
+                "❌ --max-concurrent is required to prevent GPU memory conflicts!\n\n"
+                "Add to your YAML config:\n"
+                "  optimization:\n"
+                "    max_concurrent: 2  # Match your GPU count\n\n"
+                "Or use CLI: --max-concurrent 2"
+            )
         
         logger.info(f"Starting optimization: {total_trials} trials, "
                    f"max concurrent: {max_concurrent if max_concurrent != float('inf') else 'unlimited'}")

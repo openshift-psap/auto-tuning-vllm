@@ -30,13 +30,13 @@ pip install auto-tune-vllm
 #### CLI Interface
 ```bash
 # Run optimization study
-auto-tune-vllm optimize --config study_config.yaml
+auto-tune-vllm optimize --config config.yaml --max-concurrent 2
 
 # Stream live logs  
 auto-tune-vllm logs --study-id 42 --trial-number 15
 
 # Resume interrupted study
-auto-tune-vllm resume --study-id 42
+auto-tune-vllm resume --study-name study_35884
 ```
 
 

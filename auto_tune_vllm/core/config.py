@@ -110,6 +110,7 @@ class OptimizationConfig:
     sampler: str = "tpe"  # "tpe", "random", "botorch", "nsga2", "grid" 
     n_trials: int = 100
     n_startup_trials: Optional[int] = None  # Number of startup trials for samplers that support it
+    max_concurrent: Optional[int] = None  # Maximum concurrent trials (required for resource management)
     
     # New structured format fields
     approach: Optional[str] = None  # "single_objective" or "multi_objective"
@@ -301,12 +302,18 @@ class ConfigValidator:
                  vllm_version: Optional[str] = None):
         """Initialize with parameter schema and optional defaults."""
         if schema_path is None:
-            # Try to use version-specific schema if vllm_version is provided
-            if vllm_version is not None:
-                schema_path = self._get_versioned_schema_path(vllm_version)
-            else:
-                # Use default schema shipped with package
-                schema_path = Path(__file__).parent.parent / "schemas" / "parameter_schema_original.yaml"
+            # Use default schema shipped with package
+            # Auto-detect vLLM version and use appropriate schema
+            try:
+                import vllm
+                vllm_version = vllm.__version__
+                if vllm_version.startswith("0.10.0"):
+                    schema_path = Path(__file__).parent.parent / "schemas" / "v0_10_0.yaml"
+                else:
+                    schema_path = Path(__file__).parent.parent / "schemas" / "v0_10_1_1.yaml"
+            except ImportError:
+                # Fallback to v0_10_1_1 if vLLM not available
+                schema_path = Path(__file__).parent.parent / "schemas" / "v0_10_1_1.yaml"
         
         self.schema_path = Path(schema_path)
         self.schema = self._load_schema()
