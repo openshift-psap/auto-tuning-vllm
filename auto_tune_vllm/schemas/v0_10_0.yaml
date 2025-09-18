@@ -45,11 +45,6 @@ parameters:
     default: []  # vLLM default: empty list (disabled)
     description: "CUDA graph capture sizes"
     
-  enable_cuda_graphs:
-    type: "boolean"
-    data_type: "bool"
-    default: false  # Inferred from empty cuda_graph_sizes default
-    description: "Enable CUDA graph optimization"
     
   # Prefill optimization
   long_prefill_token_threshold:
@@ -106,7 +101,7 @@ parameters:
   preemption_mode:
     type: "list"
     data_type: "str"
-    options: ["recompute", "swap", null]
+    options: ["recompute", "swap"]
     default: null  # Determined automatically based on use case
     description: "Preemption strategy for memory management"
     

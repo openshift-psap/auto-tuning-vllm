@@ -69,7 +69,7 @@ def optimize_command(
     config: str = typer.Option(..., "--config", "-c", help="Study configuration file"),
     backend: str = typer.Option("ray", "--backend", "-b", help="Execution backend: 'ray' (only supported option)"),
     n_trials: Optional[int] = typer.Option(None, "--trials", "-n", help="Number of trials (overrides config)"),
-    max_concurrent: Optional[int] = typer.Option(None, "--max-concurrent", help="REQUIRED: Max concurrent trials (1=single GPU, 2=dual GPU, etc.)"),
+    max_concurrent: Optional[int] = typer.Option(None, "--max-concurrent", help="REQUIRED: Max concurrent trials to run simultaneously."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose logging"),
     create_db: bool = typer.Option(False, "--create-db", help="Create database if it doesn't exist"),
     start_ray_head: bool = typer.Option(False, "--start-ray-head", help="Start Ray head if no cluster is found"),
@@ -139,6 +139,13 @@ def optimize_command(
         # Run optimization
         # Use CLI value or fall back to YAML config
         final_max_concurrent = max_concurrent or study_config.optimization.max_concurrent
+        if final_max_concurrent is None:
+            console.print("[bold red]❌ --max-concurrent is required (or set optimization.max_concurrent in the config)[/bold red]")
+            console.print("YAML:\n  optimization:\n    max_concurrent: 2  # Match your GPU count")
+            raise typer.Exit(1)
+        if final_max_concurrent < 1:
+            console.print("[bold red]❌ --max-concurrent must be >= 1[/bold red]")
+            raise typer.Exit(1)
         
         run_optimization_sync(
             execution_backend, 
@@ -574,7 +581,7 @@ def resume_command(
     backend: str = typer.Option("ray", "--backend", "-b", help="Execution backend: 'ray' (only supported option)"),
     n_trials: Optional[int] = typer.Option(None, "--trials", "-n", help="Number of additional trials to run"),
     n_total_trials: Optional[int] = typer.Option(None, "--total-trials", help="Total number of trials to reach (overrides config)"),
-    max_concurrent: Optional[int] = typer.Option(None, "--max-concurrent", help="REQUIRED: Max concurrent trials (1=single GPU, 2=dual GPU, etc.)"),
+    max_concurrent: Optional[int] = typer.Option(None, "--max-concurrent", help="REQUIRED: Max concurrent trials to run simultaneously (should match your GPU count)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose logging"),
     start_ray_head: bool = typer.Option(False, "--start-ray-head", help="Start Ray head if no cluster is found"),
     python_executable: Optional[str] = typer.Option(None, "--python-executable", help="Explicit Python executable path for Ray workers"),
@@ -625,8 +632,16 @@ def resume_command(
         # Resume study
         # Use CLI value or fall back to YAML config
         final_max_concurrent = max_concurrent or study_config.optimization.max_concurrent
+        if (n_trials or n_total_trials):  # Only required if we will run new trials
+            if final_max_concurrent is None:
+                console.print("[bold red]❌ --max-concurrent is required to resume with new trials[/bold red]")
+                console.print("Set CLI flag or config: optimization.max_concurrent")
+                raise typer.Exit(1)
+            if final_max_concurrent < 1:
+                console.print("[bold red]❌ --max-concurrent must be >= 1[/bold red]")
+                raise typer.Exit(1)
         resume_study_sync(execution_backend, study_config, n_trials, n_total_trials, final_max_concurrent)
-        
+
     except Exception as e:
         console.print(f"[bold red]Resume failed: {e}[/bold red]")
         if verbose:

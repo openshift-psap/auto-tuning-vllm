@@ -39,10 +39,8 @@ def run_baseline_test(model=None, max_seconds=None, prompt_tokens=None, output_t
     
     # Add baseline-specific flags to manage memory usage
     baseline_flags = [
-        "--gpu-memory-utilization", "0.85",  # Use 85% of GPU memory instead of default 90%
-        "--max-num-seqs", str(concurrency),   # Limit concurrent sequences
-        "--disable-sliding-window",           # Disable sliding window to save memory
-        "--enforce-eager"                     # Use eager execution to avoid compilation overhead
+
+        "--max-num-seqs", str(concurrency),   # Limit concurrent sequencesoverhead
     ]
     
     vllm_cmd = build_vllm_command(model_name=model, port=port, candidate_flags=baseline_flags)

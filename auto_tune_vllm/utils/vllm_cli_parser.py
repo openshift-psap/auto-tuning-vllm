@@ -356,8 +356,6 @@ class VLLMCLIParser:
                      param_def["type"] = "range"
                      param_def["data_type"] = "float"
                      if arg.default_value is not None:
--                        param_def["min"] = max(0.0, arg.default_value - 1.0)
--                        param_def["max"] = min(1.0, arg.default_value + 1.0)
                         dv = float(arg.default_value)
                         if 0.0 <= dv <= 1.0:
                             param_def["min"] = max(0.0, dv - 0.1)
@@ -492,18 +490,18 @@ class VLLMCLIParser:
         Returns:
             Default value or None if not found
         """
-     def get_parameter_defaults(self, param_name: str) -> Any:
+        
+    def get_parameter_defaults(self, param_name: str) -> Any:
         # Ensure the CLI has been parsed so self.arguments is populated
         if not self.arguments:
             self.parse()
-         # Normalize parameter name
-         if not param_name.startswith('--'):
-             param_name = '--' + param_name.replace('_', '-')
-         
-         if param_name in self.arguments:
-             return self.arguments[param_name].default_value
-         
-         return None
+        # Normalize parameter name
+        if not param_name.startswith('--'):
+            param_name = '--' + param_name.replace('_', '-')
+        
+        if param_name in self.arguments:
+            return self.arguments[param_name].default_value
+        return None
 
 
 def main():

@@ -388,15 +388,19 @@ class StudyController:
         """
         total_trials = n_trials or self.config.optimization.n_trials
         
-        # Require explicit concurrency specification
+        # Require explicit, positive concurrency specification
         if max_concurrent is None:
-            raise ValueError(
+            msg = (
                 "❌ --max-concurrent is required to prevent GPU memory conflicts!\n\n"
                 "Add to your YAML config:\n"
                 "  optimization:\n"
                 "    max_concurrent: 2  # Match your GPU count\n\n"
                 "Or use CLI: --max-concurrent 2"
             )
+            raise ValueError(msg)
+        if max_concurrent < 1:
+            raise ValueError("--max-concurrent must be >= 1")
+
         
         logger.info(f"Starting optimization: {total_trials} trials, "
                    f"max concurrent: {max_concurrent if max_concurrent != float('inf') else 'unlimited'}")

@@ -302,18 +302,22 @@ class ConfigValidator:
                  vllm_version: Optional[str] = None):
         """Initialize with parameter schema and optional defaults."""
         if schema_path is None:
-            # Use default schema shipped with package
-            # Auto-detect vLLM version and use appropriate schema
-            try:
-                import vllm
-                vllm_version = vllm.__version__
-                if vllm_version.startswith("0.10.0"):
-                    schema_path = Path(__file__).parent.parent / "schemas" / "v0_10_0.yaml"
-                else:
-                    schema_path = Path(__file__).parent.parent / "schemas" / "v0_10_1_1.yaml"
-            except ImportError:
-                # Fallback to v0_10_1_1 if vLLM not available
+            # Resolve vLLM version: prefer explicit, else auto-detect, else None
+            resolved_version = vllm_version
+            if resolved_version is None:
+                try:
+                    import vllm  # noqa: F401
+                    from importlib.metadata import version as _dist_version
+                    resolved_version = _dist_version("vllm")
+                except Exception:
+                    resolved_version = None
+            # Choose schema
+            if resolved_version and resolved_version.startswith("0.10.0"):
+                schema_path = Path(__file__).parent.parent / "schemas" / "v0_10_0.yaml"
+            else:
                 schema_path = Path(__file__).parent.parent / "schemas" / "v0_10_1_1.yaml"
+        # Store resolved version for defaults handling
+        self.vllm_version = vllm_version or locals().get("resolved_version")
         
         self.schema_path = Path(schema_path)
         self.schema = self._load_schema()
