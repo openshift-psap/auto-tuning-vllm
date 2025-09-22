@@ -148,7 +148,7 @@ Use an existing Ray cluster (recommended if one is already running):
 auto-tune-vllm optimize \
   --config examples/study_config_local_exec.yaml \
   --venv-path "$(pwd)/venv" \
-  --max-concurrent <gpu_count>
+  --max-concurrent <count>
 ```
 
 Start a new Ray head locally (when no cluster is running):
@@ -157,7 +157,7 @@ Start a new Ray head locally (when no cluster is running):
 auto-tune-vllm optimize \
   --config examples/study_config_local_exec.yaml \
   --venv-path "$(pwd)/venv" \
-  --max-concurrent <gpu_count> \
+  --max-concurrent <count> \
   --start-ray-head
 ```
 
@@ -223,7 +223,7 @@ You can now explore optimization history, parameter importance, and parallel coo
     ray stop --force
     ray start --head --dashboard-host=0.0.0.0
     ```
-- **Important**: Add `--max-concurrent <gpu_count>` or set `max_concurrent: <gpu_count>` in your YAML config.
+- **Important**: Add `--max-concurrent <count>` or set `max_concurrent: <count>` in your YAML config.
 
 ### Next Steps
 
