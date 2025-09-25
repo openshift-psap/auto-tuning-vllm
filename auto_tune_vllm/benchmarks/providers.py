@@ -8,6 +8,7 @@ import os
 import subprocess
 import tempfile
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any, Dict
 
 from .config import BenchmarkConfig
@@ -20,10 +21,18 @@ class BenchmarkProvider(ABC):
     
     def __init__(self):
         self._logger = logger  # Default to module logger
+        self._trial_context = None  # Store trial context for file paths
     
     def set_logger(self, custom_logger):
         """Set a custom logger for this benchmark provider."""
         self._logger = custom_logger
+    
+    def set_trial_context(self, study_name: str, trial_id: str):
+        """Set trial context for benchmark result storage."""
+        self._trial_context = {
+            'study_name': study_name,
+            'trial_id': trial_id
+        }
     
     @abstractmethod
     def run_benchmark(self, model_url: str, config: BenchmarkConfig) -> Dict[str, Any]:
@@ -95,9 +104,44 @@ class GuideLLMBenchmark(BenchmarkProvider):
             # e.g., FileNotFoundError for the CLI
             raise RuntimeError("Failed to execute GuideLLM CLI") from e
         finally:
-            # Cleanup results file
+            # Copy results to permanent location before cleanup
             if os.path.exists(results_file):
+                preserved_file = self._preserve_results_file(results_file)
+                if preserved_file:
+                    self._logger.info(f"Benchmark results preserved at: {preserved_file}")
+                # Clean up temporary file
                 os.unlink(results_file)
+    
+    def _preserve_results_file(self, temp_file: str) -> str:
+        """Copy benchmark results to permanent location in study directory."""
+        if self._trial_context is None:
+            self._logger.warning("No trial context set, cannot preserve results file")
+            return None
+        
+        try:
+            # Create directory structure: /tmp/auto-tune-vllm-local-run/logs/{study_name}/benchmark_results/
+            study_name = self._trial_context['study_name']
+            trial_id = self._trial_context['trial_id']
+            
+            # Use /tmp as base directory for consistency with existing log structure
+            base_dir = Path("/tmp/auto-tune-vllm-local-run/logs")
+            benchmark_dir = base_dir / study_name / "benchmark_results"
+            
+            # Create directory if it doesn't exist
+            benchmark_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Create permanent results file with trial-specific name
+            permanent_file = benchmark_dir / f"{trial_id}_benchmark_results.json"
+            
+            # Copy the temporary file to permanent location
+            import shutil
+            shutil.copy2(temp_file, permanent_file)
+            
+            return str(permanent_file)
+            
+        except Exception as e:
+            self._logger.warning(f"Failed to preserve benchmark results: {e}")
+            return None
     
     def _build_guidellm_command(
         self, 
