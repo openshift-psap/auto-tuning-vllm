@@ -107,7 +107,7 @@ class OptimizationConfig:
     
     # Backward compatibility fields
     objective: Union[str, List[str]] = None  # Old format: "maximize", "minimize", or list
-    sampler: str = "tpe"  # "tpe", "random", "botorch", "nsga2", "grid" 
+    sampler: str = "tpe"  # "tpe", "random", "gp", "botorch", "nsga2", "grid" 
     n_trials: int = 100
     n_startup_trials: Optional[int] = None  # Number of startup trials for samplers that support it
     max_concurrent: Optional[int] = None  # Maximum concurrent trials (required for resource management)

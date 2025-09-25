@@ -9,7 +9,8 @@ from typing import Dict, Optional, List
 
 import optuna
 from optuna.samplers import (
-    GridSampler, 
+    GridSampler,
+    GPSampler,
     NSGAIISampler,
     RandomSampler,
     TPESampler
@@ -309,6 +310,8 @@ class StudyController:
             return TPESampler()
         elif sampler_name == "random":
             return RandomSampler()
+        elif sampler_name == "gp":
+            return GPSampler()
         elif sampler_name == "botorch":
             return optuna.integration.BoTorchSampler()
         elif sampler_name == "nsga2":
