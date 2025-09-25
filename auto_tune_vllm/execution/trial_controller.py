@@ -231,6 +231,13 @@ class BaseTrialController(TrialController):
             if hasattr(self.benchmark_provider, 'set_logger'):
                 self.benchmark_provider.set_logger(benchmark_logger)
             
+            # Pass trial context for benchmark result storage
+            if hasattr(self.benchmark_provider, 'set_trial_context'):
+                self.benchmark_provider.set_trial_context(
+                    trial_config.study_name, 
+                    trial_config.trial_id
+                )
+            
             benchmark_result = self.benchmark_provider.run_benchmark(
                 model_url=server_info["url"],
                 config=trial_config.benchmark_config
