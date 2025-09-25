@@ -57,9 +57,8 @@ class GuideLLMBenchmark(BenchmarkProvider):
         """Run GuideLLM benchmark."""
         self._logger.info(f"Starting GuideLLM benchmark for {config.model}")
         
-        # Create temporary file for results
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            results_file = f.name
+        # Create results file path directly in permanent location
+        results_file = self._get_results_file_path()
         
         try:
             # Build GuideLLM command
@@ -73,6 +72,7 @@ class GuideLLMBenchmark(BenchmarkProvider):
 
             # Run GuideLLM
             self._logger.info(f"Running: {' '.join(cmd)}")
+            self._logger.info(f"Results will be saved to: {results_file}")
             process = subprocess.run(
                 cmd,
                 timeout=config.max_seconds + 120,  # Add buffer for setup/teardown
@@ -103,20 +103,14 @@ class GuideLLMBenchmark(BenchmarkProvider):
         except OSError as e:
             # e.g., FileNotFoundError for the CLI
             raise RuntimeError("Failed to execute GuideLLM CLI") from e
-        finally:
-            # Copy results to permanent location before cleanup
-            if os.path.exists(results_file):
-                preserved_file = self._preserve_results_file(results_file)
-                if preserved_file:
-                    self._logger.info(f"Benchmark results preserved at: {preserved_file}")
-                # Clean up temporary file
-                os.unlink(results_file)
     
-    def _preserve_results_file(self, temp_file: str) -> str:
-        """Copy benchmark results to permanent location in study directory."""
+    def _get_results_file_path(self) -> str:
+        """Get the permanent results file path, creating directory structure if needed."""
         if self._trial_context is None:
-            self._logger.warning("No trial context set, cannot preserve results file")
-            return None
+            # Fallback to temporary file if no trial context
+            self._logger.warning("No trial context set, using temporary file")
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                return f.name
         
         try:
             # Create directory structure: /tmp/auto-tune-vllm-local-run/logs/{study_name}/benchmark_results/
@@ -133,15 +127,12 @@ class GuideLLMBenchmark(BenchmarkProvider):
             # Create permanent results file with trial-specific name
             permanent_file = benchmark_dir / f"{trial_id}_benchmark_results.json"
             
-            # Copy the temporary file to permanent location
-            import shutil
-            shutil.copy2(temp_file, permanent_file)
-            
             return str(permanent_file)
             
         except Exception as e:
-            self._logger.warning(f"Failed to preserve benchmark results: {e}")
-            return None
+            self._logger.warning(f"Failed to create permanent results path: {e}, using temporary file")
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                return f.name
     
     def _build_guidellm_command(
         self, 
