@@ -46,6 +46,8 @@ class TrialConfig:
     trial_number: Optional[int] = None  # Only for Optuna trials (for study.tell())
     trial_type: str = "optimization"  # "baseline" | "optimization" | "probe"
     parameters: Dict[str, Any] = field(default_factory=dict)  # vLLM parameters from Optuna
+    parameter_configs: Optional[Dict[str, Any]] = None  # Parameter configuration metadata for determining env vars
+    static_environment_variables: Dict[str, str] = field(default_factory=dict)  # Static environment variables
     benchmark_config: BenchmarkConfig = None
     optimization_config: Optional[Any] = None  # Optimization configuration from study
     resource_requirements: Dict[str, float] = field(default_factory=dict)
@@ -63,9 +65,13 @@ class TrialConfig:
     
     @property
     def vllm_args(self) -> List[str]:
-        """Convert parameters to vLLM command-line arguments."""
+        """Convert non-environment parameters to vLLM command-line arguments."""
         args = []
         for param_name, value in self.parameters.items():
+            # Skip environment variables - they're handled separately
+            if self._is_environment_parameter(param_name):
+                continue
+                
             # Convert underscore to dash for CLI
             cli_param = param_name.replace("_", "-")
             
@@ -76,6 +82,37 @@ class TrialConfig:
                 args.extend([f"--{cli_param}", str(value)])
         
         return args
+    
+    @property
+    def environment_vars(self) -> Dict[str, str]:
+        """Get all environment variables as string dictionary (optimizable + static)."""
+        env_vars = {}
+        
+        # Add static environment variables first
+        env_vars.update({key: str(value) for key, value in self.static_environment_variables.items() if value is not None})
+        
+        # Add optimizable environment variables from parameters (can override static ones)
+        for param_name, value in self.parameters.items():
+            if self._is_environment_parameter(param_name) and value is not None:
+                env_vars[param_name] = str(value)
+            
+        return env_vars
+    
+    def _is_environment_parameter(self, param_name: str) -> bool:
+        """Check if a parameter is an environment variable."""
+        if self.parameter_configs:
+            # Use parameter configuration metadata to identify environment parameters
+            from .config import EnvironmentParameter
+            param_config = self.parameter_configs.get(param_name)
+            return param_config and isinstance(param_config, EnvironmentParameter)
+        else:
+            # Fallback: use heuristic for common environment variable names
+            env_var_names = {
+                'VLLM_ATTENTION_BACKEND', 'CUDA_VISIBLE_DEVICES', 'VLLM_CACHE_ROOT',
+                'VLLM_CONFIGURE_LOGGING', 'VLLM_WORKER_MULTIPROC_METHOD', 'TOKENIZERS_PARALLELISM',
+                'VLLM_ENGINE_ITERATION_TIMEOUT_S', 'VLLM_API_SERVER_CHAT_TEMPLATE'
+            }
+            return param_name in env_var_names
 
 
 @dataclass

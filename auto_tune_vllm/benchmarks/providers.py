@@ -52,6 +52,25 @@ class BenchmarkProvider(ABC):
 
 class GuideLLMBenchmark(BenchmarkProvider):
     """GuideLLM benchmark provider implementation."""
+
+    # Maps metric names to their appropriate request category in GuideLLM output
+    METRIC_CATEGORIES = {
+        # Throughput metrics - use 'total' for overall system performance
+        "output_tokens_per_second": "total",
+        "requests_per_second": "total",
+        "tokens_per_second": "total",
+
+        # Quality metrics - use 'successful' for performance characteristics
+        "request_latency": "successful",
+        "time_to_first_token_ms": "successful",
+        "inter_token_latency_ms": "successful",
+        "time_per_output_token_ms": "successful",
+
+        # Count metrics - use 'successful'
+        "output_token_count": "successful",
+        "prompt_token_count": "successful",
+        "request_concurrency": "successful",
+    }
     
     def run_benchmark(self, model_url: str, config: BenchmarkConfig) -> Dict[str, Any]:
         """Run GuideLLM benchmark."""
@@ -218,17 +237,37 @@ class GuideLLMBenchmark(BenchmarkProvider):
             
             for metric_name in required_metrics:
                 if metric_name not in metrics:
-                    self._logger.warning(f"Missing metric: {metric_name}")
-                    continue
-                
-                metric_data = metrics[metric_name]["successful"]
-                
-                # Store median value and percentiles
-                result[metric_name] = metric_data["median"]
-                
+                    # FAIL HARD - no fallbacks for missing metrics
+                    raise RuntimeError(f"Required metric '{metric_name}' not found in GuideLLM results")
+
+                # Get the appropriate request category for this metric
+                category = self.METRIC_CATEGORIES.get(metric_name, "successful")
+                if metric_name not in self.METRIC_CATEGORIES:
+                    self._logger.warning(f"Unknown metric '{metric_name}', defaulting to 'successful' category")
+
+                # Validate that the category exists in the results
+                if category not in metrics[metric_name]:
+                    raise RuntimeError(
+                        f"Category '{category}' not found for metric '{metric_name}'. "
+                        f"Available categories: {list(metrics[metric_name].keys())}"
+                    )
+
+                metric_data = metrics[metric_name][category]
+
+                # Extract ALL statistical measures that GuideLLM provides
+                statistical_measures = ["mean", "median", "mode", "min", "max", "std_dev", "variance"]
+
+                for measure in statistical_measures:
+                    if measure in metric_data:
+                        result[f"{metric_name}_{measure}"] = metric_data[measure]
+
+                # Extract percentiles
                 percentiles = metric_data.get("percentiles", {})
                 for percentile, value in percentiles.items():
                     result[f"{metric_name}_{percentile}"] = value
+
+                # Store base metric as median for backward compatibility
+                result[metric_name] = metric_data.get("median", metric_data.get("mean", 0.0))
             
             return result
             

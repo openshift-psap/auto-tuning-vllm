@@ -62,7 +62,7 @@ parameters:
   max_seq_len_to_capture:
     type: "list"
     data_type: "int"
-    options: [4096, 8192, 16384]
+    options: [4096, 8192, 12288, 16384, 24576, 32768]
     default: 8192  # vLLM default from modelconfig
     description: "Maximum sequence length for CUDA graphs"
     
@@ -138,6 +138,7 @@ vllm_defaults:
     pipeline_parallel_size: 1
     tensor_parallel_size: 1
     
+defaults:    
   schedulerconfig:
     cuda_graph_sizes: []
     long_prefill_token_threshold: 0

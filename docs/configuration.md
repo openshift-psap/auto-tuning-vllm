@@ -373,13 +373,11 @@ Baseline trials establish performance baselines using pure vLLM defaults before 
 ```yaml
 baseline:
   enabled: true
-  run_first: true  # Run baseline before optimization trials
   concurrency_levels: [50, 100, 150]  # Test multiple load levels
 ```
 
 #### Configuration Fields:
 - **`enabled`** (boolean): Enable baseline trials
-- **`run_first`** (boolean): Run baseline trials before optimization (recommended: true)
 - **`concurrency_levels`** (array): List of concurrency levels to test baseline performance
 
 ### Baseline Trial Behavior
@@ -395,7 +393,6 @@ This provides clean baseline performance data for comparison with optimized conf
 ```yaml
 baseline:
   enabled: true
-  run_first: true
   concurrency_levels: [50, 100]
 
 optimization:
@@ -468,6 +465,25 @@ These environment variables are commonly used with auto-tune-vllm:
 - **`BENCHMARK_DURATION`**: Benchmark runtime in seconds
 
 Set these in your shell or deployment environment before running auto-tune-vllm.
+
+## vLLM Environment Variables
+
+Auto-tune-vllm supports passing environment variables to vLLM processes in two ways:
+
+- **Environment parameters**: Add `type: environment` in the `parameters` section (list-only options required)
+- **Static environment variables**: Use `static_environment_variables` section for consistent key-value pairs
+
+```yaml
+parameters:
+  VLLM_ATTENTION_BACKEND:
+    enabled: true
+    type: environment
+    options: ["FLASH_ATTN", "XFORMERS"]
+    
+static_environment_variables:
+  VLLM_CACHE_ROOT: "/tmp/vllm_cache"
+  VLLM_DEBUG: "0"
+```
 
 ## Configuration Examples
 

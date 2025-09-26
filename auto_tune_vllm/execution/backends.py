@@ -49,6 +49,11 @@ class ExecutionBackend(ABC):
         """Clean shutdown of backend resources."""
         pass
 
+    @abstractmethod
+    def cleanup_all_trials(self):
+        """Force cleanup of all active trials and their resources (vLLM processes)."""
+        pass
+
 
 
 
@@ -66,6 +71,7 @@ class RayExecutionBackend(ExecutionBackend):
         # Legacy: resource_requirements per backend (now calculated per trial)
         self.resource_requirements = resource_requirements or {"num_gpus": 1, "num_cpus": 4}
         self.active_jobs: Dict[str, object] = {}  # job_id -> ray_ref
+        self.active_actors: Dict[str, object] = {}  # job_id -> ray_actor
         self.start_ray_head = start_ray_head
         self._started_ray_head = False  # Track if we started Ray head for cleanup
         
@@ -223,13 +229,14 @@ class RayExecutionBackend(ExecutionBackend):
             controller_options["runtime_env"] = runtime_env
         
         controller = RayTrialActor.options(**controller_options).remote()
-        
+
         # Submit trial execution
         future_ref = controller.run_trial.remote(trial_config)
         job_id = str(future_ref)  # Use Ray ObjectRef as job ID
-        
-        # Track active job
+
+        # Track active job and actor
         self.active_jobs[job_id] = future_ref
+        self.active_actors[job_id] = controller
         
         logger.info(f"Submitted trial {trial_config.trial_id} to Ray cluster")
         return JobHandle(trial_config.trial_id, job_id)
@@ -268,8 +275,10 @@ class RayExecutionBackend(ExecutionBackend):
                     result = ray.get(ray_ref)  # Get completed result
                     completed_results.append(result)
                     logger.info(f"Completed trial {handle.trial_id}")
-                    # Remove from active jobs
+                    # Remove from active jobs and actors
                     del self.active_jobs[handle.backend_job_id]
+                    if handle.backend_job_id in self.active_actors:
+                        del self.active_actors[handle.backend_job_id]
                 except Exception as e:
                     # Trial failed - create error result
                     from ..core.trial import TrialResult, ExecutionInfo
@@ -283,13 +292,65 @@ class RayExecutionBackend(ExecutionBackend):
                     )
                     completed_results.append(error_result)
                     logger.error(f"Trial {handle.trial_id} failed: {e}")
-                    # Remove from active jobs
+                    # Remove from active jobs and actors
                     del self.active_jobs[handle.backend_job_id]
+                    if handle.backend_job_id in self.active_actors:
+                        del self.active_actors[handle.backend_job_id]
             else:
                 remaining_handles.append(handle)
-        
+
         return completed_results, remaining_handles
-    
+
+    def cleanup_all_trials(self):
+        """Force cleanup of all active trials and their vLLM processes."""
+        import ray
+
+        if not self.active_actors:
+            logger.info("No active trials to cleanup")
+            return
+
+        logger.info(f"Cleaning up {len(self.active_actors)} active trials...")
+
+        # Call cleanup_resources on all active actors with timeout
+        cleanup_futures = []
+        for job_id, actor in self.active_actors.items():
+            try:
+                # Call cleanup asynchronously with timeout
+                cleanup_ref = actor.cleanup_resources.remote()
+                cleanup_futures.append((job_id, cleanup_ref))
+                logger.info(f"Initiated cleanup for trial {job_id}")
+            except Exception as e:
+                logger.warning(f"Failed to initiate cleanup for trial {job_id}: {e}")
+
+        # Wait for cleanup with timeout
+        timeout = 30  # 30 seconds timeout
+        if cleanup_futures:
+            try:
+                refs_only = [ref for _, ref in cleanup_futures]
+                ready_refs, remaining_refs = ray.wait(refs_only, num_returns=len(refs_only), timeout=timeout)
+
+                # Log results
+                if ready_refs:
+                    logger.info(f"Successfully cleaned up {len(ready_refs)} trials")
+                if remaining_refs:
+                    logger.warning(f"Cleanup timeout for {len(remaining_refs)} trials")
+
+            except Exception as e:
+                logger.error(f"Error during cleanup wait: {e}")
+
+        # Force kill actors that didn't cleanup properly
+        for job_id, actor in list(self.active_actors.items()):
+            try:
+                ray.kill(actor)
+                logger.info(f"Force killed actor for trial {job_id}")
+            except Exception as e:
+                logger.warning(f"Failed to kill actor for trial {job_id}: {e}")
+
+        # Clear tracking
+        self.active_actors.clear()
+        self.active_jobs.clear()
+        logger.info("Completed cleanup of all active trials")
+
     def shutdown(self):
         """Shutdown Ray cluster connection."""
         import ray
@@ -388,7 +449,13 @@ class LocalExecutionBackend(ExecutionBackend):
                 remaining_handles.append(handle)
         
         return completed_results, remaining_handles
-    
+
+    def cleanup_all_trials(self):
+        """Cleanup all active trials (stub implementation for local backend)."""
+        logger.info("Local backend does not require explicit trial cleanup")
+        # Local backend doesn't need to do anything special here
+        # Individual trial controllers handle their own cleanup when they complete
+
     def shutdown(self):
         """Shutdown thread pool executor."""
         self.executor.shutdown(wait=True)

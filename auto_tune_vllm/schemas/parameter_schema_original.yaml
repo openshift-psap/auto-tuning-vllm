@@ -47,7 +47,7 @@ parameters:
   max_seq_len_to_capture:
     type: "list"
     data_type: "int"
-    options: [4096, 8192, 16384]
+    options: [4096, 8192, 12288, 16384, 24576, 32768]
     description: "Maximum sequence length for CUDA graphs"
     
   max_num_partial_prefills:
@@ -58,8 +58,8 @@ parameters:
     
   compilation_config:
     type: "list"
-    data_type: "int"
-    options: [0, 1, 2, 3]
+    data_type: "str"
+    options: ['-O0','-O1', '-O2', '-O3']
     description: "Compilation optimization level"
     
   enable_cuda_graphs:

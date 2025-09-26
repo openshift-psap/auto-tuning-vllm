@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
 import subprocess
 import time
 from abc import ABC, abstractmethod
@@ -419,6 +420,12 @@ class BaseTrialController(TrialController):
         
         vllm_logger.info(f"Starting vLLM server: {' '.join(cmd)}")
         
+        # Prepare environment variables
+        env = os.environ.copy()
+        trial_env_vars = trial_config.environment_vars
+        if trial_env_vars:
+            env.update(trial_env_vars)
+            vllm_logger.info(f"Environment variable keys: {sorted(trial_env_vars.keys())}")
         # Start process with captured output
         self.vllm_process = subprocess.Popen(
             cmd,
@@ -426,7 +433,9 @@ class BaseTrialController(TrialController):
             stderr=subprocess.STDOUT,  # Combine stderr with stdout
             text=True,
             bufsize=1,  # Line buffered
-            universal_newlines=True
+            universal_newlines=True,
+            env=env,  # Pass environment variables to the process
+            start_new_session=True # Prevent vLLM termination from killing the parent process -> framework termination
         )
         
         # Start a thread to capture and log vLLM output
@@ -496,26 +505,20 @@ class BaseTrialController(TrialController):
             # Get the metric key with percentile if specified
             metric_key = optimization_config.get_metric_key(len(objective_values))
             
-            # Extract the value from benchmark results
+            # Extract the value from benchmark results - FAIL HARD if missing
             value = benchmark_result.get(metric_key)
-            
-            # Handle missing metrics gracefully
+
             if value is None:
-                # Try fallback to base metric without percentile
-                fallback_key = objective.metric
-                value = benchmark_result.get(fallback_key, 0.0)
-                
-                logger.warning(
-                    f"Metric '{metric_key}' not found in benchmark results, "
-                    f"using fallback '{fallback_key}' = {value}"
+                raise RuntimeError(
+                    f"Metric '{metric_key}' not found in benchmark results. "
+                    f"Available metrics: {list(benchmark_result.keys())}"
                 )
-            
+
             # Convert to float and handle potential conversion errors
             try:
                 value = float(value)
             except (ValueError, TypeError):
-                logger.error(f"Failed to convert metric '{metric_key}' value '{value}' to float, using 0.0")
-                value = 0.0
+                raise RuntimeError(f"Failed to convert metric '{metric_key}' value '{value}' to float")
             
             objective_values.append(value)
         
@@ -524,13 +527,35 @@ class BaseTrialController(TrialController):
     def cleanup_resources(self):
         """Clean up vLLM server process."""
         if self.vllm_process:
+            pid = self.vllm_process.pid
             try:
-                self.vllm_process.terminate()
-                self.vllm_process.wait(timeout=10)
-                logger.info(f"Terminated vLLM process {self.vllm_process.pid}")
+                # Send SIGINT first for graceful cleanup (what vLLM expects)
+                logger.info(f"Sending SIGINT to vLLM process {pid} for graceful shutdown")
+                self.vllm_process.send_signal(signal.SIGINT)
+                self.vllm_process.wait(timeout=15)  # Give more time for graceful cleanup
+                logger.info(f"Gracefully terminated vLLM process {pid}")
             except subprocess.TimeoutExpired:
-                self.vllm_process.kill()
-                logger.warning(f"Force killed vLLM process {self.vllm_process.pid}")
+                # If graceful shutdown fails, then use SIGTERM
+                logger.warning(f"Graceful shutdown timed out, sending SIGTERM to {pid}")
+                self.vllm_process.terminate()
+                try:
+                    self.vllm_process.wait(timeout=5)
+                    logger.info(f"Terminated vLLM process {pid} with SIGTERM")
+                except subprocess.TimeoutExpired:
+                    # Last resort: kill entire process group to catch multiprocessing children
+                    logger.warning(f"SIGTERM timeout, killing process group for {pid}")
+                    try:
+                        # Kill the entire process group (negative PID)
+                        os.killpg(os.getpgid(pid), signal.SIGKILL)
+                        logger.info(f"Killed process group for {pid}")
+                    except (OSError, ProcessLookupError) as e:
+                        logger.warning(f"Failed to kill process group for {pid}: {e}")
+                        # Fallback to regular kill if killpg fails
+                        try:
+                            self.vllm_process.kill()
+                            logger.warning(f"Force killed vLLM process {pid}")
+                        except (OSError, ProcessLookupError):
+                            logger.warning(f"Process {pid} already dead")
             finally:
                 self.vllm_process = None
     
@@ -578,7 +603,16 @@ class RayWorkerTrialController(BaseTrialController):
         except Exception as e:
             vllm_logger.warning(f"Could not get Ray context: {e}")
         
-        # Call parent implementation (which logs full Python environment)
+        # Check for CUDA_VISIBLE_DEVICES override in trial environment variables
+        trial_env_vars = trial_config.environment_vars
+        if "CUDA_VISIBLE_DEVICES" in trial_env_vars:
+            raise RuntimeError(
+                f"Trial specifies CUDA_VISIBLE_DEVICES={trial_env_vars['CUDA_VISIBLE_DEVICES']}, "
+                f"but Ray has already assigned GPUs: {gpu_ids}. "
+                f"Cannot override Ray GPU assignment. Remove CUDA_VISIBLE_DEVICES from trial environment variables."
+            )
+        
+        # Call parent implementation (which handles environment variables and logs full Python environment)
         return super()._start_vllm_server(trial_config)
 
 

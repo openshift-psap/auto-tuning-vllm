@@ -76,6 +76,17 @@ class BooleanParameter(ParameterConfig):
         return trial.suggest_categorical(self.name, [True, False])
 
 
+class EnvironmentParameter(ParameterConfig):
+    """Environment variable parameter (list-only choices)."""
+    
+    options: List[Any]
+    data_type: str = "str"
+    
+    def generate_optuna_suggest(self, trial) -> Any:
+        """Generate Optuna categorical suggestion for environment variable."""
+        return trial.suggest_categorical(self.name, self.options)
+
+
 @dataclass
 class ObjectiveConfig:
     """Configuration for a single optimization objective."""
@@ -256,9 +267,8 @@ class OptimizationConfig:
 @dataclass
 class BaselineConfig:
     """Configuration for baseline trials."""
-    
+
     enabled: bool = False
-    run_first: bool = True  # Run baseline before optimization trials
     concurrency_levels: List[int] = field(default_factory=lambda: [50])  # Concurrency levels to test
     
     def __post_init__(self):
@@ -281,6 +291,7 @@ class StudyConfig:
     optimization: OptimizationConfig
     benchmark: BenchmarkConfig
     parameters: Dict[str, ParameterConfig] = field(default_factory=dict)
+    static_environment_variables: Dict[str, str] = field(default_factory=dict)  # NEW: Static environment variables
     baseline: Optional[BaselineConfig] = None  # NEW: Baseline configuration
     logging_config: Optional[Dict[str, Any]] = None
     storage_file: Optional[str] = None  # Alternative to database_url for file-based storage
@@ -529,14 +540,43 @@ class ConfigValidator:
             if not param_config.get("enabled", True):
                 continue
             
-            # Get schema definition
+            # Check if this is an environment variable (has explicit type or not in schema)
+            param_type = param_config.get("type")
             schema_def = self.schema.get("parameters", {}).get(param_name)
-            if not schema_def:
-                raise ValueError(f"Unknown parameter in schema: {param_name}")
             
-            # Build parameter config based on type
-            validated_param = self._build_parameter_config(param_name, param_config, schema_def)
+            if param_type == "environment" or (not schema_def and "options" in param_config):
+                # This is an environment variable parameter
+                if "range" in param_config or "min" in param_config or "max" in param_config or "step" in param_config:
+                    raise ValueError(f"Environment parameter '{param_name}' cannot use range configurations. Only list options are allowed.")
+                
+                if "options" not in param_config:
+                    raise ValueError(f"Environment parameter '{param_name}' must specify options as a list")
+                
+                validated_param = EnvironmentParameter(
+                    name=param_name,
+                    enabled=param_config.get("enabled", True),
+                    options=param_config["options"],
+                    data_type=param_config.get("data_type", "str"),
+                    description=param_config.get("description", f"Environment variable {param_name}")
+                )
+            else:
+                # This is a regular vLLM parameter
+                if not schema_def:
+                    raise ValueError(f"Unknown parameter in schema: {param_name}")
+                
+                # Build parameter config based on schema type
+                validated_param = self._build_parameter_config(param_name, param_config, schema_def)
+            
             validated_params[param_name] = validated_param
+        
+        # Validate static environment variables (simple key-value pairs)
+        static_env_vars = {}
+        
+        for env_name, env_value in raw_config.get("static_environment_variables", {}).items():
+            if not isinstance(env_value, (str, int, float, bool)):
+                raise ValueError(f"Static environment variable '{env_name}' must be a simple value (string, number, or boolean), got {type(env_value)}")
+            
+            static_env_vars[env_name] = str(env_value)
         
         # Build other configs
         study_info = raw_config.get("study", {})
@@ -588,6 +628,7 @@ class ConfigValidator:
             optimization=optimization,
             benchmark=benchmark, 
             parameters=validated_params,
+            static_environment_variables=static_env_vars,
             baseline=baseline_config,
             logging_config=raw_config.get("logging"),
             storage_file=storage_file,

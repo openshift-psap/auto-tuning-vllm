@@ -410,7 +410,7 @@ class StudyController:
         
         try:
             # Run baseline trials first if configured
-            if self.config.baseline and self.config.baseline.enabled and self.config.baseline.run_first:
+            if self.config.baseline and self.config.baseline.enabled:
                 self._run_baseline_trials()
             
             while self.completed_trials < total_trials:
@@ -461,12 +461,19 @@ class StudyController:
             
             logger.info(f"Optimization completed: {self.completed_trials} trials")
             return self.study
-            
+
         except Exception as e:
             logger.error(f"Optimization failed: {e}")
             raise
         finally:
-            self.backend.shutdown()
+            # Clean up all active trials before shutting down the backend
+            try:
+                logger.info("Initiating cleanup of all active trials...")
+                self.backend.cleanup_all_trials()
+            except Exception as cleanup_e:
+                logger.error(f"Error during trial cleanup: {cleanup_e}")
+            finally:
+                self.backend.shutdown()
     
     def _submit_available_trials(self, remaining_trials: int, max_concurrent: float):
         """Submit new trials up to limits."""
@@ -554,6 +561,7 @@ class StudyController:
             trial_number=trial.number,
             trial_type="optimization",
             parameters=parameters,
+            static_environment_variables=self.config.static_environment_variables,
             benchmark_config=self.config.benchmark,
             optimization_config=self.config.optimization,
             logging_config=self.config.logging_config
@@ -684,16 +692,16 @@ class StudyController:
         return self
     
     def _run_baseline_trials(self):
-        """Run baseline trials using pure vLLM defaults + max-num-seqs."""
+        """Run baseline trials using pure vLLM defaults + max-num-seqs when concurrency > 256."""
         logger.info("🔄 Running baseline trials...")
         
         for concurrency in self.config.baseline.concurrency_levels:
             logger.info(f"Running baseline trial with concurrency={concurrency}")
             
-            # Create baseline trial config with only max-num-seqs parameter
-            baseline_parameters = {
-                "max_num_seqs": concurrency
-            }
+            # Create baseline trial config with max-num-seqs parameter only if concurrency > 256
+            baseline_parameters = {}
+            if concurrency > 256:
+                baseline_parameters["max_num_seqs"] = concurrency
             
             # Create special baseline trial configuration
             baseline_trial_config = TrialConfig(
@@ -702,6 +710,7 @@ class StudyController:
                 trial_number=None,  # No Optuna trial number for baselines
                 trial_type="baseline",
                 parameters=baseline_parameters,
+                static_environment_variables=self.config.static_environment_variables,
                 benchmark_config=self.config.benchmark,
                 optimization_config=self.config.optimization,
                 logging_config=self.config.logging_config
