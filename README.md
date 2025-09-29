@@ -22,7 +22,9 @@ For a detailed starter guide, see the [Quick Start Guide](docs/quick_start.md).
 ### Installation
 
 ```bash
-pip install auto-tune-vllm
+git clone https://github.com/auto-tune-vllm/auto-tune-vllm.git
+cd auto-tune-vllm
+pip install -e .
 ```
 
 ### Basic Usage
