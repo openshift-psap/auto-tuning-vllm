@@ -22,7 +22,7 @@ For a detailed starter guide, see the [Quick Start Guide](docs/quick_start.md).
 ### Installation
 
 ```bash
-git clone https://github.com/auto-tune-vllm/auto-tune-vllm.git
+git clone https://github.com/openshift-psap/auto-tuning-vllm.git
 cd auto-tune-vllm
 pip install -e .
 ```
