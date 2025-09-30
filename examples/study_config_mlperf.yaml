@@ -3,7 +3,10 @@ study:
   name: "mlperf_optimization_study"
 
 optimization:
-  preset: "high_throughput"
+  approach: "single_objective"
+  objective:
+    metric: "output_tokens_per_second"  # Maximize throughput
+    direction: "maximize"
   sampler: "gp"
   n_trials: 100
   max_concurrent: 1  # MLPerf typically runs single instance benchmarks

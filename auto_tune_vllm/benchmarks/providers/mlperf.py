@@ -91,15 +91,18 @@ class MLPerfBenchmark(BenchmarkProvider):
         result_files = []
         for root, _, files in os.walk(results_dir):
             for file in files:
-                if (
-                    file.endswith(".txt")
-                    or "summary" in file.lower()
-                    or "result" in file.lower()
-                ):
+                if file.endswith(".txt") and "summary" in file.lower():
                     result_files.append(os.path.join(root, file))
 
         if not result_files:
             raise RuntimeError(f"No MLPerf result files found in {results_dir}")
+
+        metrics = {
+            "request_per_second": 0.0,
+            "latency_p99": 0.0,
+            "latency_mean": 0.0,
+            "output_tokens_per_second": 0.0,
+        }
 
         # Parse MLPerf log format
         for result_file in result_files:
@@ -114,15 +117,15 @@ class MLPerfBenchmark(BenchmarkProvider):
                     line = line.strip()
 
                     # Throughput (samples per second)
-                    if line.startswith("Completed samples per second"):
+                    if line.startswith("Samples per second"):
                         throughput = float(line.split(":")[1].strip())
-                        metrics["throughput"] = throughput
+                        metrics["request_per_second"] = throughput
 
                     # Tokens per second
-                    elif line.startswith("Completed tokens per second"):
+                    elif line.startswith("Tokens per second"):
                         if ":" in line:
                             tokens_per_second = float(line.split(":")[1].strip())
-                            metrics["tokens_per_second"] = tokens_per_second
+                            metrics["output_tokens_per_second"] = tokens_per_second
 
                     # Mean latency (convert from nanoseconds to milliseconds)
                     elif line.startswith("Mean latency (ns)"):
@@ -138,25 +141,11 @@ class MLPerfBenchmark(BenchmarkProvider):
                             p99_latency_ns / 1_000_000
                         )  # Convert to ms
 
-                # Return metrics if we found the required ones
-                if all(
-                    key in metrics
-                    for key in [
-                        "throughput",
-                        "tokens_per_second",
-                        "latency_mean",
-                        "latency_p99",
-                    ]
-                ):
-                    return metrics
+                self._logger.info(f"{metrics=}")
+                return metrics
 
             except (IOError, ValueError, IndexError):
                 continue
 
         # If no valid files found, return default metrics
-        return {
-            "throughput": 0.0,
-            "latency_p99": 0.0,
-            "latency_mean": 0.0,
-            "tokens_per_second": 0.0,
-        }
+        return metrics 
