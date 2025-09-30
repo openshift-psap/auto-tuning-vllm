@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
-import signal
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -565,7 +565,6 @@ class BaseTrialController(TrialController):
         )
 
         # Start a thread to capture and log vLLM output
-        import threading
 
         def log_vllm_output():
             try:
