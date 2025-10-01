@@ -13,10 +13,10 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from ..core.config import StudyConfig
+from ..core.db_utils import clear_study_data, verify_database_connection
 from ..core.study_controller import StudyController
 from ..execution.backends import RayExecutionBackend
-from ..logging.manager import LogStreamer, CentralizedLogger
-from ..core.db_utils import verify_database_connection, clear_study_data
+from ..logging.manager import CentralizedLogger, LogStreamer
 
 # Setup rich console and app
 console = Console()
@@ -295,7 +295,7 @@ def run_optimization_sync(
             
             # Mark task as completed
             progress.update(task, completed=total_trials, description="✅ Optimization completed")
-        except Exception as e:
+        except Exception:
             # Mark task as failed and re-raise
             progress.update(task, description="❌ Optimization failed")
             raise

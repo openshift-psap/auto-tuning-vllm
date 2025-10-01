@@ -1,7 +1,7 @@
 """Benchmark providers and interfaces."""
 
-from .providers import BenchmarkProvider, GuideLLMBenchmark
 from .config import BenchmarkConfig
+from .providers import BenchmarkProvider, GuideLLMBenchmark
 
 __all__ = [
     "BenchmarkProvider",
