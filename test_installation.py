@@ -21,7 +21,9 @@ def test_imports():
     print("✓ Configuration system imported successfully")
 
     # Execution backends
-    from auto_tune_vllm.execution.backends import LocalExecutionBackend as _LEB  # noqa: F401
+    from auto_tune_vllm.execution.backends import (
+        LocalExecutionBackend as _LEB,  # noqa: F401
+    )
     print("✓ Execution system imported successfully")
 
     # Benchmark providers
@@ -54,9 +56,9 @@ def test_backend_interface():
     """Test execution backend interfaces."""
     print("\nTesting execution backend interface...")
     
-    from auto_tune_vllm.execution.backends import LocalExecutionBackend
-    from auto_tune_vllm.core.trial import TrialConfig
     from auto_tune_vllm.benchmarks.config import BenchmarkConfig
+    from auto_tune_vllm.core.trial import TrialConfig
+    from auto_tune_vllm.execution.backends import LocalExecutionBackend
     
     # Create local backend
     backend = LocalExecutionBackend(max_concurrent=1)
