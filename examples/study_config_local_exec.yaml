@@ -60,7 +60,7 @@ parameters: # parameters to optimize
 
   long_prefill_token_threshold:
     enabled: true
-    options: [0, 256, 512, 1024, 2048, 4096, 8192] 
+    options: [0, 256, 512, 1024, 2048, 4096, 8192, 1150]
 
   max_num_partial_prefills:
     enabled: true
