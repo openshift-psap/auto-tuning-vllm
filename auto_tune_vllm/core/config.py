@@ -4,87 +4,20 @@ from __future__ import annotations
 
 import os
 import re
-from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import yaml
-from pydantic import BaseModel, Field
 
-# Import BenchmarkConfig from the benchmarks module
 from ..benchmarks.config import BenchmarkConfig
-
-
-class ParameterConfig(BaseModel, ABC):
-    """Base class for parameter configurations."""
-
-    name: str
-    enabled: bool = True
-    description: Optional[str] = None
-
-    @abstractmethod
-    def generate_optuna_suggest(self, trial) -> Any:
-        """Generate Optuna trial suggestion for this parameter."""
-        pass
-
-
-class RangeParameter(ParameterConfig):
-    """Range-based parameter (continuous or discrete)."""
-
-    min_value: Union[int, float] = Field(alias="min")
-    max_value: Union[int, float] = Field(alias="max")
-    step: Optional[Union[int, float]] = None
-    data_type: str = "float"  # "int" or "float"
-
-    def generate_optuna_suggest(self, trial) -> Union[int, float]:
-        """Generate Optuna range suggestion."""
-        if self.data_type == "int":
-            return trial.suggest_int(
-                self.name,
-                int(self.min_value),
-                int(self.max_value),
-                step=int(self.step) if self.step else None,
-            )
-        else:
-            return trial.suggest_float(
-                self.name,
-                float(self.min_value),
-                float(self.max_value),
-                step=float(self.step) if self.step else None,
-            )
-
-
-class ListParameter(ParameterConfig):
-    """List-based parameter (categorical choices)."""
-
-    options: List[Any]
-    data_type: str = "str"
-
-    def generate_optuna_suggest(self, trial) -> Any:
-        """Generate Optuna categorical suggestion."""
-        return trial.suggest_categorical(self.name, self.options)
-
-
-class BooleanParameter(ParameterConfig):
-    """Boolean parameter."""
-
-    data_type: str = "bool"
-
-    def generate_optuna_suggest(self, trial) -> bool:
-        """Generate Optuna boolean suggestion."""
-        return trial.suggest_categorical(self.name, [True, False])
-
-
-class EnvironmentParameter(ParameterConfig):
-    """Environment variable parameter (list-only choices)."""
-
-    options: List[Any]
-    data_type: str = "str"
-
-    def generate_optuna_suggest(self, trial) -> Any:
-        """Generate Optuna categorical suggestion for environment variable."""
-        return trial.suggest_categorical(self.name, self.options)
+from .parameters import (
+    BooleanParameter,
+    EnvironmentParameter,
+    ListParameter,
+    ParameterConfig,
+    RangeParameter,
+)
 
 
 @dataclass
@@ -113,22 +46,25 @@ class ObjectiveConfig:
             )
         if self.direction not in valid_directions:
             raise ValueError(
-                f"Invalid direction '{self.direction}'. Valid options: {valid_directions}"
+                f"Invalid direction '{self.direction}'. "
+                f"Valid options: {valid_directions}"
             )
         if self.percentile not in valid_percentiles:
             raise ValueError(
-                f"Invalid percentile '{self.percentile}'. Valid options: {valid_percentiles}"
+                f"Invalid percentile '{self.percentile}'. "
+                f"Valid options: {valid_percentiles}"
             )
 
 
 @dataclass
 class OptimizationConfig:
-    """Optimization configuration with support for new structured format and backward compatibility."""
+    """Optimization configuration with support for new structured format.
+
+    Includes backward compatibility.
+    """
 
     # Backward compatibility fields
-    objective: Union[str, List[str]] = (
-        None  # Old format: "maximize", "minimize", or list
-    )
+    objective: Union[str, List[str]] = None  # Old format: "maximize", "minimize", list
     sampler: str = "tpe"  # "tpe", "random", "gp", "botorch", "nsga2", "grid"
     n_trials: int = 100
     n_startup_trials: Optional[int] = (
@@ -195,14 +131,16 @@ class OptimizationConfig:
             ]
         else:
             raise ValueError(
-                f"Unknown preset '{self.preset}'. Valid options: high_throughput, low_latency, balanced"
+                f"Unknown preset '{self.preset}'. "
+                f"Valid options: high_throughput, low_latency, balanced"
             )
 
     def _validate_structured_format(self):
         """Validate new structured format."""
         if self.approach not in ["single_objective", "multi_objective"]:
             raise ValueError(
-                f"Invalid approach '{self.approach}'. Valid options: single_objective, multi_objective"
+                f"Invalid approach '{self.approach}'. "
+                f"Valid options: single_objective, multi_objective"
             )
 
         if not self.objectives:
@@ -243,7 +181,8 @@ class OptimizationConfig:
                 ]
             else:
                 raise ValueError(
-                    f"Invalid objective '{self.objective}'. Use 'maximize' or 'minimize'"
+                    f"Invalid objective '{self.objective}'. "
+                    f"Use 'maximize' or 'minimize'"
                 )
         elif isinstance(self.objective, list):
             # Multi-objective (legacy format)
@@ -279,10 +218,14 @@ class OptimizationConfig:
     @property
     def optuna_directions(self) -> List[str]:
         """Get Optuna directions for study creation."""
-        return [obj.direction for obj in self.objectives]
+        if self.objectives is not None:
+            return [obj.direction for obj in self.objectives]
+        else:
+            return []
 
     def get_metric_key(self, objective_index: int = 0) -> str:
         """Get the metric key for extracting values from benchmark results."""
+        assert self.objectives is not None
         if objective_index >= len(self.objectives):
             raise IndexError(f"Objective index {objective_index} out of range")
 
@@ -316,7 +259,8 @@ class BaselineConfig:
             for concurrency in self.concurrency_levels:
                 if not isinstance(concurrency, int) or concurrency <= 0:
                     raise ValueError(
-                        f"Invalid concurrency level: {concurrency}. Must be positive integer"
+                        f"Invalid concurrency level: {concurrency}. "
+                        f"Must be positive integer"
                     )
 
 
@@ -429,14 +373,16 @@ class ConfigValidator:
 
         if versioned_schema_path.exists():
             print(
-                f"Using version-specific schema for vLLM {vllm_version}: {versioned_schema_path}"
+                f"Using version-specific schema for vLLM {vllm_version}: "
+                f"{versioned_schema_path}"
             )
             return versioned_schema_path
         else:
             # Fallback to default schema with warning
             fallback_schema = schemas_dir / "parameter_schema_original.yaml"
             print(
-                f"Warning: No schema found for vLLM version {vllm_version}, falling back to default schema: {fallback_schema}"
+                f"Warning: No schema found for vLLM version {vllm_version}, "
+                f"falling back to default schema: {fallback_schema}"
             )
             return fallback_schema
 
@@ -489,7 +435,7 @@ class ConfigValidator:
     def _flatten_defaults(self, defaults_data: Dict[str, Any]) -> Dict[str, Any]:
         """Flatten the nested defaults structure for easy lookup."""
         flat_defaults = {}
-        for section, section_defaults in defaults_data.get("defaults", {}).items():
+        for _, section_defaults in defaults_data.get("defaults", {}).items():
             for param_name, default_value in section_defaults.items():
                 flat_defaults[param_name] = default_value
         return flat_defaults
@@ -514,8 +460,10 @@ class ConfigValidator:
         Expand environment variables in YAML content.
 
         Supports patterns:
-        - ${VAR_NAME} - expands to environment variable value or empty string if not set
-        - ${VAR_NAME:-default_value} - expands to environment variable value or default_value if not set
+        - ${VAR_NAME} - expands to environment variable value
+          or empty string if not set
+        - ${VAR_NAME:-default_value} - expands to environment variable value
+          or default_value if not set
 
         Args:
             yaml_content: Raw YAML content as string
@@ -539,7 +487,8 @@ class ConfigValidator:
                 else:
                     # Log warning for missing required env vars without defaults
                     print(
-                        f"Warning: Environment variable '{var_name}' not found, using empty string"
+                        f"Warning: Environment variable '{var_name}' not found, "
+                        f"using empty string"
                     )
                     return ""
             return env_value
@@ -574,10 +523,13 @@ class ConfigValidator:
             tuple: (study_name, study_prefix, use_explicit_name)
 
         Rules:
-        1. If just 'name' is provided: Use exact name, fail if exists (use_explicit_name=True)
-        2. If just 'prefix' is provided: Auto-generate with prefix (use_explicit_name=False)
+        1. If just 'name' is provided: Use exact name, fail if exists
+           (use_explicit_name=True)
+        2. If just 'prefix' is provided: Auto-generate with prefix
+           (use_explicit_name=False)
         3. If both provided: Validation error
-        4. If neither provided: Auto-generate with default prefix (use_explicit_name=False)
+        4. If neither provided: Auto-generate with default prefix
+           (use_explicit_name=False)
         """
         name = study_info.get("name")
         prefix = study_info.get("prefix")
@@ -586,7 +538,8 @@ class ConfigValidator:
         if name and prefix:
             raise ValueError(
                 "Cannot specify both 'name' and 'prefix' in study configuration. "
-                "Use 'name' for exact study names that must be unique, or 'prefix' for auto-generated names."
+                "Use 'name' for exact study names that must be unique, "
+                "or 'prefix' for auto-generated names."
             )
 
         # Scenario 1: Just name provided - use exact name, fail if exists
@@ -616,7 +569,8 @@ class ConfigValidator:
             if not param_config.get("enabled", True):
                 continue
 
-            # Check if this is an environment variable (has explicit type or not in schema)
+            # Check if this is an environment variable
+            # (has explicit type or not in schema)
             param_type = param_config.get("type")
             schema_def = self.schema.get("parameters", {}).get(param_name)
 
@@ -631,12 +585,14 @@ class ConfigValidator:
                     or "step" in param_config
                 ):
                     raise ValueError(
-                        f"Environment parameter '{param_name}' cannot use range configurations. Only list options are allowed."
+                        f"Environment parameter '{param_name}' cannot use "
+                        f"range configurations. Only list options are allowed."
                     )
 
                 if "options" not in param_config:
                     raise ValueError(
-                        f"Environment parameter '{param_name}' must specify options as a list"
+                        f"Environment parameter '{param_name}' "
+                        f"must specify options as a list"
                     )
 
                 validated_param = EnvironmentParameter(
@@ -668,7 +624,8 @@ class ConfigValidator:
         ).items():
             if not isinstance(env_value, (str, int, float, bool)):
                 raise ValueError(
-                    f"Static environment variable '{env_name}' must be a simple value (string, number, or boolean), got {type(env_value)}"
+                    f"Static environment variable '{env_name}' must be a simple "
+                    f"value (string, number, or boolean), got {type(env_value)}"
                 )
 
             static_env_vars[env_name] = str(env_value)
@@ -681,13 +638,15 @@ class ConfigValidator:
             raw_static_parameters = {}
         elif not isinstance(raw_static_parameters, dict):
             raise TypeError(
-                "Static parameters must be provided as a mapping of CLI flag names to simple values."
+                "Static parameters must be provided as a mapping of CLI flag "
+                "names to simple values."
             )
 
         for param_name, param_value in raw_static_parameters.items():
             if not isinstance(param_value, (str, int, float, bool)):
                 raise ValueError(
-                    f"Static parameter '{param_name}' must be a simple value (string, number, or boolean), got {type(param_value)}"
+                    f"Static parameter '{param_name}' must be a simple value "
+                    f"(string, number, or boolean), got {type(param_value)}"
                 )
 
             # Keep the original type (don't convert to string like env vars)
@@ -734,7 +693,8 @@ class ConfigValidator:
 
         if database_url and storage_file:
             raise ValueError(
-                "Cannot specify both database_url and storage_file. Choose one storage method."
+                "Cannot specify both database_url and storage_file. "
+                "Choose one storage method."
             )
 
         # Handle baseline configuration
@@ -742,12 +702,14 @@ class ConfigValidator:
         if "baseline" in raw_config:
             baseline_data = raw_config["baseline"]
             if baseline_data.get("enabled", False):
-                # Ensure parameters field is a dict, not None (YAML can parse empty as None)
+                # Ensure parameters field is a dict, not None
+                # (YAML can parse empty as None)
                 if baseline_data.get("parameters") is None:
                     baseline_data["parameters"] = {}
                 elif not isinstance(baseline_data.get("parameters"), dict):
                     raise TypeError(
-                        "Baseline parameters must be provided as a mapping of CLI flag names to simple values."
+                        "Baseline parameters must be provided as a mapping of "
+                        "CLI flag names to simple values."
                     )
                 baseline_config = BaselineConfig(**baseline_data)
 
@@ -780,9 +742,12 @@ class ConfigValidator:
         }
 
         def get_value(key: str, schema_fallback=None, allow_defaults: bool = False):
-            """
-            Priority: user_config > (defaults if allow_defaults) > schema > schema_fallback.
-            Note: defaults are parameter values, not bounds; do NOT use for min/max/step/options.
+            """Get value with priority.
+
+            Priority: user_config > (defaults if allow_defaults) > schema
+            > schema_fallback.
+            Note: defaults are parameter values, not bounds; do NOT use for
+            min/max/step/options.
             """
             if key in user_config:
                 return user_config[key]
@@ -817,4 +782,3 @@ class ConfigValidator:
             return BooleanParameter(**base_config)
         else:
             raise ValueError(f"Unknown parameter type: {param_type}")
-

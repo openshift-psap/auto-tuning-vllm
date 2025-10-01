@@ -99,7 +99,8 @@ class StudyController:
             storage = f"sqlite:///{config.storage_file}"
             storage_type = "SQLite file"
         else:
-            # This should not happen due to validation in config.py, but fallback to in-memory
+            # This should not happen due to validation in config.py,
+            # but fallback to in-memory
             storage = None
             storage_type = "in-memory"
 
@@ -136,9 +137,11 @@ class StudyController:
                 raise RuntimeError(
                     f"Study '{config.study_name}' already exists. "
                     f"Options: \n"
-                    f"  • Use 'auto-tune-vllm resume --config <config_file>' to continue the existing study\n"
+                    f"  • Use 'auto-tune-vllm resume --config <config_file>' "
+                    f"to continue the existing study\n"
                     f"  • Change the study name to create a new study\n"
-                    f"  • Use 'prefix: {config.study_name}' instead of 'name' for auto-generated unique names"
+                    f"  • Use 'prefix: {config.study_name}' instead of 'name' "
+                    f"for auto-generated unique names"
                 )
             elif config.database_url and (
                 "does not exist" in str(e).lower() or "database" in str(e).lower()
@@ -152,7 +155,8 @@ class StudyController:
 
         # Log study information
         logger.info(
-            f"Created study: {config.study_name} with {config.optimization.sampler} sampler"
+            f"Created study: {config.study_name} "
+            f"with {config.optimization.sampler} sampler"
         )
         logger.info(
             f"🔍 Study Name: {config.study_name} (use this name for log viewing)"
@@ -166,7 +170,8 @@ class StudyController:
             log_database_url = config.logging_config.get("database_url")
             log_file_path = config.logging_config.get("file_path")
 
-        # Default to main database if no specific logging config and database is available
+        # Default to main database if no specific logging config
+        # and database is available
         if not log_database_url and not log_file_path and config.database_url:
             log_database_url = config.database_url
         elif not log_database_url and not log_file_path and not config.database_url:
@@ -190,25 +195,34 @@ class StudyController:
             # Provide appropriate log viewing instructions
             if log_file_path:
                 logger.info(
-                    f"📋 File logging enabled. Logs will be written to: {log_file_path}"
+                    f"📋 File logging enabled. "
+                    f"Logs will be written to: {log_file_path}"
                 )
                 logger.info(
-                    f"📋 View logs with: auto-tune-vllm logs --study-name {config.study_name} --log-path {log_file_path}"
+                    f"📋 View logs with: auto-tune-vllm logs "
+                    f"--study-name {config.study_name} "
+                    f"--log-path {log_file_path}"
                 )
             elif log_database_url:
                 logger.info(
-                    f"📋 Database logging ready. View logs with: auto-tune-vllm logs --study-name {config.study_name} --database-url {log_database_url}"
+                    f"📋 Database logging ready. View logs with: "
+                    f"auto-tune-vllm logs --study-name {config.study_name} "
+                    f"--database-url {log_database_url}"
                 )
 
         except Exception as e:
             logger.warning(f"Failed to initialize logging infrastructure: {e}")
             if log_file_path:
                 logger.info(
-                    f"📋 To view file logs: auto-tune-vllm logs --study-name {config.study_name} --log-path {log_file_path}"
+                    f"📋 To view file logs: auto-tune-vllm logs "
+                    f"--study-name {config.study_name} "
+                    f"--log-path {log_file_path}"
                 )
             elif log_database_url:
                 logger.info(
-                    f"📋 To view logs: auto-tune-vllm logs --study-name {config.study_name} --database-url {log_database_url}"
+                    f"📋 To view logs: auto-tune-vllm logs "
+                    f"--study-name {config.study_name} "
+                    f"--database-url {log_database_url}"
                 )
             else:
                 logger.info(
@@ -244,7 +258,8 @@ class StudyController:
                     f"Study '{config.study_name}' not found in storage. "
                     f"Storage file does not exist: {config.storage_file}. "
                     f"Options:\n"
-                    f"  • Use 'auto-tune-vllm optimize --config <config_file>' to create a new study\n"
+                    f"  • Use 'auto-tune-vllm optimize --config <config_file>' "
+                    f"to create a new study\n"
                     f"  • Verify the study name and storage path are correct"
                 )
             storage = f"sqlite:///{config.storage_file}"
@@ -269,7 +284,8 @@ class StudyController:
                 raise RuntimeError(
                     f"Study '{config.study_name}' not found in storage. "
                     f"Options:\n"
-                    f"  • Use 'auto-tune-vllm optimize --config <config_file>' to create a new study\n"
+                    f"  • Use 'auto-tune-vllm optimize --config <config_file>' "
+                    f"to create a new study\n"
                     f"  • Verify the study name is correct\n"
                     f"  • Check that the storage location contains the study"
                 )
@@ -297,7 +313,8 @@ class StudyController:
             log_database_url = config.logging_config.get("database_url")
             log_file_path = config.logging_config.get("file_path")
 
-        # Default to main database if no specific logging config and database is available
+        # Default to main database if no specific logging config
+        # and database is available
         if not log_database_url and not log_file_path and config.database_url:
             log_database_url = config.database_url
         elif not log_database_url and not log_file_path and not config.database_url:
@@ -321,25 +338,34 @@ class StudyController:
             # Provide appropriate log viewing instructions
             if log_file_path:
                 logger.info(
-                    f"📋 File logging enabled. Logs will be written to: {log_file_path}"
+                    f"📋 File logging enabled. "
+                    f"Logs will be written to: {log_file_path}"
                 )
                 logger.info(
-                    f"📋 View logs with: auto-tune-vllm logs --study-name {config.study_name} --log-path {log_file_path}"
+                    f"📋 View logs with: auto-tune-vllm logs "
+                    f"--study-name {config.study_name} "
+                    f"--log-path {log_file_path}"
                 )
             elif log_database_url:
                 logger.info(
-                    f"📋 Database logging ready. View logs with: auto-tune-vllm logs --study-name {config.study_name} --database-url {log_database_url}"
+                    f"📋 Database logging ready. View logs with: "
+                    f"auto-tune-vllm logs --study-name {config.study_name} "
+                    f"--database-url {log_database_url}"
                 )
 
         except Exception as e:
             logger.warning(f"Failed to initialize logging infrastructure: {e}")
             if log_file_path:
                 logger.info(
-                    f"📋 To view file logs: auto-tune-vllm logs --study-name {config.study_name} --log-path {log_file_path}"
+                    f"📋 To view file logs: auto-tune-vllm logs "
+                    f"--study-name {config.study_name} "
+                    f"--log-path {log_file_path}"
                 )
             elif log_database_url:
                 logger.info(
-                    f"📋 To view logs: auto-tune-vllm logs --study-name {config.study_name} --database-url {log_database_url}"
+                    f"📋 To view logs: auto-tune-vllm logs "
+                    f"--study-name {config.study_name} "
+                    f"--database-url {log_database_url}"
                 )
             else:
                 logger.info(
@@ -380,7 +406,8 @@ class StudyController:
                         max_val = param_config.max_value
                         step = param_config.step or 1
 
-                        # Use integer-based generation for floats to avoid accumulation drift
+                        # Use integer-based generation for floats
+                        # to avoid accumulation drift
                         if isinstance(min_val, float) or isinstance(step, float):
                             # Calculate number of steps and generate via multiplication
                             n_steps = int((max_val - min_val) / step) + 1
@@ -455,9 +482,12 @@ class StudyController:
         if max_concurrent < 1:
             raise ValueError("--max-concurrent must be >= 1")
 
+        max_concurrent_str = (
+            max_concurrent if max_concurrent != float('inf') else 'unlimited'
+        )
         logger.info(
             f"Starting optimization: {total_trials} trials, "
-            f"max concurrent: {max_concurrent if max_concurrent != float('inf') else 'unlimited'}"
+            f"max concurrent: {max_concurrent_str}"
         )
 
         try:
@@ -481,7 +511,8 @@ class StudyController:
 
                     if newly_completed > 0:
                         logger.info(
-                            f"Progress: {self.completed_trials}/{total_trials} trials completed"
+                            f"Progress: {self.completed_trials}/{total_trials} "
+                            f"trials completed"
                         )
 
                 # Sleep before next poll cycle
@@ -508,8 +539,10 @@ class StudyController:
                 final_cleanup_attempts += 1
                 if final_cleanup_attempts % 12 == 0:  # Every minute
                     logger.warning(
-                        f"Still waiting for {len(self.active_trials)} active trials to complete "
-                        f"(attempt {final_cleanup_attempts}/{max_cleanup_attempts})"
+                        f"Still waiting for {len(self.active_trials)} "
+                        f"active trials to complete "
+                        f"(attempt {final_cleanup_attempts}/"
+                        f"{max_cleanup_attempts})"
                     )
                     logger.debug(f"Active trial IDs: {list(self.active_trials.keys())}")
 
@@ -518,8 +551,10 @@ class StudyController:
             # If we hit the max attempts, log an error but continue
             if final_cleanup_attempts >= max_cleanup_attempts and self.active_trials:
                 logger.error(
-                    f"Timeout waiting for {len(self.active_trials)} active trials to complete. "
-                    f"Forcing completion. Active trial IDs: {list(self.active_trials.keys())}"
+                    f"Timeout waiting for {len(self.active_trials)} "
+                    f"active trials to complete. "
+                    f"Forcing completion. "
+                    f"Active trial IDs: {list(self.active_trials.keys())}"
                 )
                 self.active_trials.clear()  # Force clear to prevent infinite loop
 
@@ -549,10 +584,8 @@ class StudyController:
                 logger.error(f"Failed to get next trial from Optuna: {e}")
                 break
 
-            # Build trial configuration
             trial_config = self._build_trial_config(trial)
 
-            # Submit to execution backend
             try:
                 job_handle = self.backend.submit_trial(trial_config)
                 self.active_trials[trial_config.trial_id] = job_handle
@@ -595,7 +628,8 @@ class StudyController:
                     if result.success and result.objective_values:
                         self.study.tell(result.trial_number, result.objective_values)
                         logger.info(
-                            f"Trial {trial_id} completed successfully: {result.objective_values}"
+                            f"Trial {trial_id} completed successfully: "
+                            f"{result.objective_values}"
                         )
                     else:
                         # Failed trial
@@ -606,8 +640,11 @@ class StudyController:
                     optimization_completed_count += 1
 
                 elif result.trial_type == "baseline":
+                    baseline_result = (
+                        result.objective_values if result.success else 'failed'
+                    )
                     logger.info(
-                        f"Baseline trial {trial_id} completed: {result.objective_values if result.success else 'failed'}"
+                        f"Baseline trial {trial_id} completed: {baseline_result}"
                     )
                     # Baseline trials don't count toward optimization progress
 
@@ -660,7 +697,8 @@ class StudyController:
                 )
             return self.baseline_results[best_concurrency]
         else:
-            # For multi-objective, return the first baseline (could be improved with Pareto analysis)
+            # For multi-objective, return the first baseline
+            # could be improved with Pareto analysis
             first_concurrency = min(self.baseline_results.keys())
             return self.baseline_results[first_concurrency]
 
@@ -756,8 +794,6 @@ class StudyController:
         logger.info(
             f"🔍 Study Name: {self.config.study_name} (use this name for log viewing)"
         )
-
-        # Provide appropriate log viewing instructions based on logging configuration
         log_database_url = None
         log_file_path = None
 
@@ -765,7 +801,6 @@ class StudyController:
             log_database_url = self.config.logging_config.get("database_url")
             log_file_path = self.config.logging_config.get("file_path")
 
-        # Default to main database if no specific logging config and database is available
         if not log_database_url and not log_file_path and self.config.database_url:
             log_database_url = self.config.database_url
         elif (
@@ -777,11 +812,15 @@ class StudyController:
         # Display appropriate instructions using the unified logs command
         if log_file_path:
             logger.info(
-                f"📋 View logs with: auto-tune-vllm logs --study-name {self.config.study_name} --log-path {log_file_path}"
+                f"📋 View logs with: auto-tune-vllm logs "
+                f"--study-name {self.config.study_name} "
+                f"--log-path {log_file_path}"
             )
         elif log_database_url:
             logger.info(
-                f"📋 View logs with: auto-tune-vllm logs --study-name {self.config.study_name} --database-url {log_database_url}"
+                f"📋 View logs with: auto-tune-vllm logs "
+                f"--study-name {self.config.study_name} "
+                f"--database-url {log_database_url}"
             )
         else:
             logger.info(
@@ -795,14 +834,18 @@ class StudyController:
         return self
 
     def _run_baseline_trials(self):
-        """Run baseline trials using pure vLLM defaults + max-num-seqs when concurrency > 256."""
+        """Run baseline trials using pure vLLM defaults.
+
+        Adds max-num-seqs when concurrency > 256.
+        """
         logger.info("🔄 Running baseline trials...")
 
         for concurrency in self.config.baseline.concurrency_levels:
             logger.info(f"Running baseline trial with concurrency={concurrency}")
 
-            # Create baseline trial config with custom parameters from config + max-num-seqs when needed
-            # Start with static parameters that apply to all trials
+            # Create baseline trial config with custom parameters from config and adds
+            # max-num-seqs when needed. Start with static parameters that apply to all
+            # trials
             baseline_parameters = self.config.static_parameters.copy()
             # Add baseline-specific parameters from config (if any)
             if self.config.baseline.parameters:
@@ -831,7 +874,8 @@ class StudyController:
 
                 # Wait for baseline trial to complete using polling mechanism
                 logger.info(
-                    f"⏳ Waiting for baseline trial (concurrency={concurrency}) to complete..."
+                    f"⏳ Waiting for baseline trial "
+                    f"(concurrency={concurrency}) to complete..."
                 )
 
                 import time
@@ -862,7 +906,8 @@ class StudyController:
                             )
                         else:
                             logger.error(
-                                f"❌ Baseline trial failed: {trial_result.error_message}"
+                                f"❌ Baseline trial failed: "
+                                f"{trial_result.error_message}"
                             )
                         break
                     else:
@@ -871,7 +916,8 @@ class StudyController:
                 else:
                     # Timeout reached
                     logger.error(
-                        f"❌ Baseline trial (concurrency={concurrency}) timed out after {timeout_seconds} seconds"
+                        f"❌ Baseline trial (concurrency={concurrency}) "
+                        f"timed out after {timeout_seconds} seconds"
                     )
 
             except Exception as e:
