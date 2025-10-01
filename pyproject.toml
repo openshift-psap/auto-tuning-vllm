@@ -43,8 +43,7 @@ postgresql = [
 ]
 dev = [
     "pytest>=7.0.0",
-    "black>=23.0.0",
-    "isort>=5.0.0",
+    "ruff>=0.1.0",
     "mypy>=1.0.0",
     "pre-commit>=3.0.0",
 ]
@@ -66,13 +65,17 @@ auto-tune-vllm = "auto_tune_vllm.cli:main"
 where = ["."]
 include = ["auto_tune_vllm*"]
 
-[tool.black]
+[tool.ruff]
 line-length = 88
-target-version = ['py310']
+target-version = "py310"
 
-[tool.isort]
-profile = "black"
-line_length = 88
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
 
 [tool.mypy]
 python_version = "3.10"
