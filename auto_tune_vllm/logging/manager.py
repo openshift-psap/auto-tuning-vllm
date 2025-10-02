@@ -345,7 +345,10 @@ class LogStreamer:
                     log_id, timestamp, level, trial_num, comp, message, worker = (
                         log_entry
                     )
-                    formatted_log = f"[{timestamp}] [T{trial_num}] [{worker[:8]}] {comp}.{level}: {message}"
+                    formatted_log = (
+                        f"[{timestamp}] [T{trial_num}] [{worker[:8]}] {comp}.{level}: "
+                        f"{message}"
+                    )
                     print(formatted_log)
 
                 # Set last_seen_id to the highest ID from recent logs
@@ -363,7 +366,10 @@ class LogStreamer:
                         log_entry
                     )
 
-                    formatted_log = f"[{timestamp}] [T{trial_num}] [{worker[:8]}] {comp}.{level}: {message}"
+                    formatted_log = (
+                        f"[{timestamp}] [T{trial_num}] [{worker[:8]}] {comp}.{level}: "
+                        f"{message}"
+                    )
                     print(formatted_log)
 
                     last_seen_id = max(last_seen_id, log_id)
@@ -391,7 +397,7 @@ class LogStreamer:
                         FROM trial_logs 
                         WHERE study_name = %s
                         ORDER BY id DESC LIMIT %s
-                    """,
+                    """,  # noqa: E501
                         (self.study_name, limit),
                     )
 
@@ -415,7 +421,7 @@ class LogStreamer:
                         FROM trial_logs 
                         WHERE study_name = %s AND id > %s
                         ORDER BY id ASC LIMIT 100
-                    """,
+                    """,  # noqa: E501
                         (self.study_name, last_seen_id),
                     )
 
@@ -424,4 +430,3 @@ class LogStreamer:
         except Exception as e:
             logger.error(f"Failed to fetch study logs: {e}")
             return []
-

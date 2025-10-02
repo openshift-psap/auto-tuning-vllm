@@ -19,8 +19,9 @@ from optuna.samplers import (
 
 from ..execution.backends import ExecutionBackend, JobHandle
 from ..logging.manager import CentralizedLogger
-from .config import EnvironmentParameter, ListParameter, RangeParameter, StudyConfig
+from .config import StudyConfig
 from .db_utils import create_database_if_not_exists, verify_database_connection
+from .parameters import EnvironmentParameter, ListParameter, RangeParameter
 from .trial import TrialConfig
 
 logger = logging.getLogger(__name__)
@@ -35,11 +36,11 @@ class StudyController:
     def __init__(
         self, backend: ExecutionBackend, study: optuna.Study, config: StudyConfig
     ):
-        self.backend = backend
-        self.study = study
-        self.config = config
+        self.backend: ExecutionBackend = backend
+        self.study: optuna.Study = study
+        self.config: StudyConfig = config
         self.active_trials: Dict[str, JobHandle] = {}
-        self.completed_trials = 0
+        self.completed_trials: int = 0
         self.baseline_results: Dict[
             int, List[float]
         ] = {}  # concurrency -> objective_values
@@ -195,8 +196,7 @@ class StudyController:
             # Provide appropriate log viewing instructions
             if log_file_path:
                 logger.info(
-                    f"📋 File logging enabled. "
-                    f"Logs will be written to: {log_file_path}"
+                    f"📋 File logging enabled. Logs will be written to: {log_file_path}"
                 )
                 logger.info(
                     f"📋 View logs with: auto-tune-vllm logs "
@@ -338,8 +338,7 @@ class StudyController:
             # Provide appropriate log viewing instructions
             if log_file_path:
                 logger.info(
-                    f"📋 File logging enabled. "
-                    f"Logs will be written to: {log_file_path}"
+                    f"📋 File logging enabled. Logs will be written to: {log_file_path}"
                 )
                 logger.info(
                     f"📋 View logs with: auto-tune-vllm logs "
@@ -375,6 +374,50 @@ class StudyController:
         return cls(backend, study, config)
 
     @staticmethod
+    def _create_search_space(config: StudyConfig) -> dict:
+        search_space = {}
+        for param_name, param_config in config.parameters.items():
+            if param_config.enabled:
+                # Convert parameter config to grid search space
+                if isinstance(param_config, ListParameter) or isinstance(
+                    param_config, EnvironmentParameter
+                ):
+                    search_space[param_name] = param_config.options
+                elif isinstance(param_config, RangeParameter):
+                    values = []
+                    min_val = param_config.min_value
+                    max_val = param_config.max_value
+                    step = param_config.step or 1
+
+                    # Use integer-based generation for floats
+                    # to avoid accumulation drift
+                    if param_config.data_type == "float":
+                        # Calculate number of steps and generate via multiplication
+                        n_steps = int((max_val - min_val) / step) + 1
+                        # Cap to reasonable grid size
+                        n_steps = min(n_steps, 10000)
+                        for i in range(n_steps):
+                            val = min_val + (i * step)
+                            if val > max_val:
+                                break
+                            # Round to avoid floating precision artifacts
+                            values.append(round(val, 3))
+                    else:
+                        # Integer range - simple iteration
+                        current = min_val
+                        while current <= max_val:
+                            values.append(current)
+                            current += step
+                            # Safety break for large ranges
+                            if len(values) > 10000:
+                                break
+                    search_space[param_name] = values
+                else:
+                    search_space[param_name] = [True, False]  # Boolean
+
+        return search_space
+
+    @staticmethod
     def _create_sampler(config: StudyConfig) -> optuna.samplers.BaseSampler:
         """Create Optuna sampler from configuration."""
         sampler_name = config.optimization.sampler.lower()
@@ -391,47 +434,7 @@ class StudyController:
             return NSGAIISampler()
         elif sampler_name == "grid":
             # Build search space for grid sampler
-            search_space = {}
-            for param_name, param_config in config.parameters.items():
-                if param_config.enabled:
-                    # Convert parameter config to grid search space
-                    if isinstance(param_config, ListParameter) or isinstance(
-                        param_config, EnvironmentParameter
-                    ):
-                        search_space[param_name] = param_config.options
-                    elif isinstance(param_config, RangeParameter):
-                        # Generate discrete values for range parameters
-                        values = []
-                        min_val = param_config.min_value
-                        max_val = param_config.max_value
-                        step = param_config.step or 1
-
-                        # Use integer-based generation for floats
-                        # to avoid accumulation drift
-                        if isinstance(min_val, float) or isinstance(step, float):
-                            # Calculate number of steps and generate via multiplication
-                            n_steps = int((max_val - min_val) / step) + 1
-                            # Cap to reasonable grid size
-                            n_steps = min(n_steps, 10000)
-                            for i in range(n_steps):
-                                val = min_val + (i * step)
-                                if val > max_val:
-                                    break
-                                # Round to avoid floating precision artifacts
-                                values.append(round(val, 3))
-                        else:
-                            # Integer range - simple iteration
-                            current = min_val
-                            while current <= max_val:
-                                values.append(current)
-                                current += step
-                                # Safety break for large ranges
-                                if len(values) > 10000:
-                                    break
-                        search_space[param_name] = values
-                    else:
-                        search_space[param_name] = [True, False]  # Boolean
-
+            search_space = StudyController._create_search_space(config)
             grid_size = StudyController._calculate_grid_size(search_space)
             logger.info(
                 f"Grid search space: {len(search_space)} parameters, "
@@ -439,8 +442,8 @@ class StudyController:
             )
             return GridSampler(search_space)
         else:
-            logger.warning(f"Unknown sampler: {sampler_name}, using TPE")
-            return TPESampler()
+            logger.warning(f"Unknown sampler: {sampler_name}")
+            raise NotImplementedError
 
     @staticmethod
     def _calculate_grid_size(search_space: Dict) -> int:
@@ -483,7 +486,7 @@ class StudyController:
             raise ValueError("--max-concurrent must be >= 1")
 
         max_concurrent_str = (
-            max_concurrent if max_concurrent != float('inf') else 'unlimited'
+            max_concurrent if max_concurrent != float("inf") else "unlimited"
         )
         logger.info(
             f"Starting optimization: {total_trials} trials, "
@@ -641,7 +644,7 @@ class StudyController:
 
                 elif result.trial_type == "baseline":
                     baseline_result = (
-                        result.objective_values if result.success else 'failed'
+                        result.objective_values if result.success else "failed"
                     )
                     logger.info(
                         f"Baseline trial {trial_id} completed: {baseline_result}"
@@ -882,13 +885,11 @@ class StudyController:
 
                 timeout_seconds = TWO_HOURS_IN_SECONDS
                 start_time = time.time()
-                poll_interval = POLL_RATE # Poll every 5 seconds
+                poll_interval = POLL_RATE  # Poll every 5 seconds
 
                 while time.time() - start_time < timeout_seconds:
                     # Poll for completion
-                    completed_results, remaining_handles = self.backend.poll_trials(
-                        [job_handle]
-                    )
+                    completed_results, _ = self.backend.poll_trials([job_handle])
 
                     if completed_results:
                         # Trial completed
