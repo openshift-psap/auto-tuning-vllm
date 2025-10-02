@@ -76,7 +76,7 @@ class BaseTrialController(TrialController):
             missing_list = "\n  - ".join(missing_packages)
             raise RuntimeError(
                 f"Missing required packages on Ray worker node:\n  - {missing_list}\n\n"
-                f"Ray worker nodes must have the same Python environment as the head node.\n"
+                f"Ray worker nodes must have the same Python environment as the head node.\n"  # noqa: E501
                 f"Install auto-tune-vllm on all Ray cluster nodes:\n"
                 f"  pip install auto-tune-vllm"
             )
@@ -250,7 +250,10 @@ class BaseTrialController(TrialController):
         #         detailed_metrics={},
         #         execution_info=execution_info,
         #         success=False,
-        #         error_message="Parallelism is set lower than MIN_GPUS in the static_environment_variables",
+        #         error_message=(
+        #             "Parallelism is set lower than MIN_GPUS "
+        #             "in the static_environment_variables"
+        #         ),
         #     )
 
         try:

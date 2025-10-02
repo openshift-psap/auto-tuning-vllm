@@ -132,13 +132,14 @@ class RayExecutionBackend(ExecutionBackend):
                 # We're in a virtual environment
                 runtime_env["python"] = current_python
                 logger.info(
-                    f"Auto-detected virtual environment, Ray workers will use: {current_python}"
+                    f"Auto-detected virtual environment, "
+                    f"Ray workers will use: {current_python}"
                 )
             else:
                 logger.warning(
                     "No Python environment specified and not in a virtual environment. "
-                    "Ray workers may use different Python installations. "
-                    "Consider using --python-executable, --venv-path, or --conda-env options."
+                    "Ray workers may use different Python installations. Consider using"
+                    " --python-executable, --venv-path, or --conda-env options."
                 )
 
         return runtime_env
@@ -163,12 +164,14 @@ class RayExecutionBackend(ExecutionBackend):
                     else:
                         raise RuntimeError(
                             f"Failed to connect to Ray cluster: {e}\n"
-                            f"Use --start-ray-head to automatically start a Ray head, or start one manually:\n"
+                            f"Use --start-ray-head to automatically start a Ray head, "
+                            f"or start one manually:\n"
                             f"  ray start --head --port=10001"
                         )
         except ImportError:
             raise ImportError(
-                "Ray is required for RayExecutionBackend. Install with: pip install ray[default]"
+                "Ray is required for RayExecutionBackend. "
+                "Install with: pip install ray[default]"
             )
 
     def _start_ray_head(self):
@@ -186,7 +189,8 @@ class RayExecutionBackend(ExecutionBackend):
             # Check for ray available in path
             if shutil.which("ray") is None:
                 raise RuntimeError(
-                    "Ray is not installed. Cannot start Ray head. Install or add Ray to PATH."
+                    "Ray is not installed. Cannot start Ray head. "
+                    "Install or add Ray to PATH."
                 )
 
             # Start Ray head as subprocess
@@ -278,7 +282,7 @@ class RayExecutionBackend(ExecutionBackend):
             return [], job_handles
 
         # Check which trials are ready (non-blocking)
-        ready_refs, pending_refs = ray.wait(
+        ready_refs, _ = ray.wait(
             active_refs, num_returns=len(active_refs), timeout=0
         )
 
@@ -478,4 +482,3 @@ class LocalExecutionBackend(ExecutionBackend):
         """Shutdown thread pool executor."""
         self.executor.shutdown(wait=True)
         logger.info("Shutdown local execution backend")
-

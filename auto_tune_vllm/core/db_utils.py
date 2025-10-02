@@ -185,23 +185,23 @@ def clear_study_data(
                 # Delete in order respecting foreign key constraints
                 # Delete trial-related data first
                 cur.execute(
-                    "DELETE FROM trial_intermediate_values WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = %s)",
+                    "DELETE FROM trial_intermediate_values WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = %s)",  # noqa: E501
                     (optuna_study_id,),
                 )
                 cur.execute(
-                    "DELETE FROM trial_system_attributes WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = %s)",
+                    "DELETE FROM trial_system_attributes WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = %s)",  # noqa: E501
                     (optuna_study_id,),
                 )
                 cur.execute(
-                    "DELETE FROM trial_user_attributes WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = %s)",
+                    "DELETE FROM trial_user_attributes WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = %s)",  # noqa: E501
                     (optuna_study_id,),
                 )
                 cur.execute(
-                    "DELETE FROM trial_values WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = %s)",
+                    "DELETE FROM trial_values WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = %s)",  # noqa: E501
                     (optuna_study_id,),
                 )
                 cur.execute(
-                    "DELETE FROM trial_params WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = %s)",
+                    "DELETE FROM trial_params WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = %s)",  # noqa: E501
                     (optuna_study_id,),
                 )
 
@@ -218,7 +218,8 @@ def clear_study_data(
                 result["trials_deleted"] = trials_count
 
                 logger.info(
-                    f"Deleted {trials_count} trials and study '{study_name}' from Optuna database"
+                    f"Deleted {trials_count} trials "
+                    f"and study '{study_name}' from Optuna database"
                 )
 
         # Clear trial logs if requested
