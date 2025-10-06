@@ -19,6 +19,7 @@ class BenchmarkConfig:
     # Advanced GuideLLM parameters
     processor: Optional[str] = None  # Processor model, defaults to model if not set
     rate: int = 50  # Single rate value for concurrent requests
+    samples: int = 1000  # Number of samples to take
     
     # Token statistics for synthetic data - only used when explicitly specified
     prompt_tokens_stdev: Optional[int] = None
