@@ -65,7 +65,8 @@ def demo_configuration_loading():
         gpu_param = config.parameters.get("gpu_memory_utilization")
         if gpu_param:
             print(
-                f"   gpu_memory_utilization: {gpu_param.min_value} - {gpu_param.max_value}"
+                f"   gpu_memory_utilization: {gpu_param.min_value} - "
+                f"{gpu_param.max_value}"
             )
             print("   (Uses vLLM default 0.9 as baseline)")
     except Exception as e:
@@ -91,12 +92,14 @@ def demo_version_generation():
     print()
     print("💡 To generate defaults in a custom location:")
     print(
-        "   python scripts/generate_vllm_defaults.py --output /path/to/defaults --verbose"
+        "   python scripts/generate_vllm_defaults.py --output "
+        "/path/to/defaults --verbose"
     )
     print()
     print("💡 To generate a single (non-versioned) defaults file:")
     print(
-        "   python scripts/generate_vllm_defaults.py --no-versioned --output defaults.yaml"
+        "   python scripts/generate_vllm_defaults.py --no-versioned "
+        "--output defaults.yaml"
     )
 
 

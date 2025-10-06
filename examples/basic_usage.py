@@ -32,7 +32,9 @@ def main():
 
     # Choose execution backend
     # Option 1: Ray distributed execution
-    # backend = RayExecutionBackend(resource_requirements={"num_gpus": 1, "num_cpus": 4})
+    # backend = RayExecutionBackend(
+    #     resource_requirements={"num_gpus": 1, "num_cpus": 4}
+    # )
 
     # Option 2: Local execution for testing
     backend = LocalExecutionBackend(max_concurrent=2)  # Use this for testing

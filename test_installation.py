@@ -62,7 +62,10 @@ def test_backend_interface():
     
     # Create local backend
     backend = LocalExecutionBackend(max_concurrent=1)
-    print(f"✓ LocalExecutionBackend created with {backend.max_concurrent} concurrent slots")
+    print(
+        f"✓ LocalExecutionBackend created with {backend.max_concurrent} "
+        f"concurrent slots"
+    )
     try:
         # Create trial config
         trial_config = TrialConfig(
@@ -92,7 +95,10 @@ def main():
         print("\nNext steps:")
         print("1. Install the package: pip install -e .")
         print("2. Test CLI: auto-tune-vllm --help")
-        print("3. Create a study config and run: auto-tune-vllm optimize --config study.yaml")
+        print(
+            "3. Create a study config and run: auto-tune-vllm optimize "
+            "--config study.yaml"
+        )
         
     except Exception as e:
         print(f"\n❌ Test failed: {e}")

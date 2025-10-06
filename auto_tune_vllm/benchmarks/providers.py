@@ -122,7 +122,9 @@ class GuideLLMBenchmark(BenchmarkProvider):
             
             try:
                 # Wait for completion with timeout
-                stdout, stderr = self._process.communicate(timeout=config.max_seconds * 1.5)
+                stdout, stderr = self._process.communicate(
+                    timeout=config.max_seconds * 1.5
+                )
                 
                 # Log GuideLLM output for debugging
                 if stdout:
@@ -136,7 +138,10 @@ class GuideLLMBenchmark(BenchmarkProvider):
                         self._process.returncode, cmd, stdout, stderr
                     )
                 
-                self._logger.debug(f"GuideLLM process completed with return code: {self._process.returncode}")
+                self._logger.debug(
+                    f"GuideLLM process completed with return code: "
+                    f"{self._process.returncode}"
+                )
                 self._logger.info("GuideLLM completed successfully")
                 
                 # Parse results
@@ -230,7 +235,7 @@ class GuideLLMBenchmark(BenchmarkProvider):
             data_config = {
                 "prompt_tokens": config.prompt_tokens,
                 "output_tokens": config.output_tokens,
-                "samples": 100 if config.samples is None else config.samples
+                "samples": config.samples
             }
 
             # Only add statistical distribution parameters if they were explicitly

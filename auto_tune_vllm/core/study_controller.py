@@ -442,7 +442,6 @@ class StudyController:
             )
             return GridSampler(search_space)
         else:
-        else:
             raise NotImplementedError(
                 f"Unknown sampler '{sampler_name}'. Supported samplers: "
                 "tpe, random, gp, botorch, nsga2, grid"

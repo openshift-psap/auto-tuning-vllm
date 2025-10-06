@@ -61,7 +61,8 @@ class TrialConfig:
     logging_config: Optional[Dict[str, Any]] = None  # Logging configuration from study
     vllm_startup_timeout: int = 300  # vLLM server startup timeout in seconds
     health_check_interval: int = 30  # Seconds between health checks during execution
-    health_check_max_failures: int = 3  # Consecutive failures before marking server as dead
+    # Consecutive failures before marking server as dead
+    health_check_max_failures: int = 3
 
     def __post_init__(self):
         """Calculate resource requirements after initialization."""

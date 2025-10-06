@@ -108,7 +108,8 @@ def main():
         for section_defaults in defaults_data.get("defaults", {}).values()
     )
     print(
-        f"📊 Extracted {total_defaults} default values across {len(defaults_data.get('defaults', {}))} sections"
+        f"📊 Extracted {total_defaults} default values across "
+        f"{len(defaults_data.get('defaults', {}))} sections"
     )
 
     # Show sample defaults
