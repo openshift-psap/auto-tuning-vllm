@@ -22,15 +22,31 @@ class BenchmarkProvider(ABC):
     def __init__(self):
         self._logger = logger  # Default to module logger
         self._trial_context = None  # Store trial context for file paths
-
+        self._process = None  # Track running benchmark process for termination
     def set_logger(self, custom_logger):
         """Set a custom logger for this benchmark provider."""
         self._logger = custom_logger
 
     def set_trial_context(self, study_name: str, trial_id: str):
         """Set trial context for benchmark result storage."""
-        self._trial_context = {"study_name": study_name, "trial_id": trial_id}
-
+        self._trial_context = {
+            'study_name': study_name,
+            'trial_id': trial_id
+        }
+    
+    def terminate_benchmark(self):
+        """Terminate the running benchmark process if active."""
+        if self._process and self._process.poll() is None:
+            self._logger.warning("Terminating benchmark process due to vLLM failure")
+            try:
+                self._process.terminate()
+                self._process.wait(timeout=5)
+            except Exception as e:
+                self._logger.warning(f"Failed to terminate benchmark gracefully: {e}")
+                try:
+                    self._process.kill()
+                except Exception:
+                    pass
     @abstractmethod
     def run_benchmark(self, model_url: str, config: BenchmarkConfig) -> Dict[str, Any]:
         """
@@ -95,30 +111,45 @@ class GuideLLMBenchmark(BenchmarkProvider):
             # Run GuideLLM
             self._logger.info(f"Running: {' '.join(cmd)}")
             self._logger.info(f"Results will be saved to: {results_file}")
-            process = subprocess.run(
+            
+            # Use Popen so we can terminate if vLLM dies
+            self._process = subprocess.Popen(
                 cmd,
-                timeout=config.max_seconds + 120,  # Add buffer for setup/teardown
-                capture_output=True,
-                text=True,
-                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
             )
-
-            # Log GuideLLM output for debugging
-            if process.stdout:
-                self._logger.info(f"GuideLLM stdout:\n{process.stdout}")
-            if process.stderr:
-                self._logger.warning(f"GuideLLM stderr:\n{process.stderr}")
-
-            self._logger.debug(
-                f"GuideLLM process completed with return code: {process.returncode}"
-            )
-
-            self._logger.info("GuideLLM completed successfully")
-
-            # Parse results
-            return self._parse_guidellm_results(results_file)
-
+            
+            try:
+                # Wait for completion with timeout
+                stdout, stderr = self._process.communicate(timeout=config.max_seconds * 1.5)
+                
+                # Log GuideLLM output for debugging
+                if stdout:
+                    self._logger.info(f"GuideLLM stdout:\n{stdout}")
+                if stderr:
+                    self._logger.warning(f"GuideLLM stderr:\n{stderr}")
+                
+                # Check return code
+                if self._process.returncode != 0:
+                    raise subprocess.CalledProcessError(
+                        self._process.returncode, cmd, stdout, stderr
+                    )
+                
+                self._logger.debug(f"GuideLLM process completed with return code: {self._process.returncode}")
+                self._logger.info("GuideLLM completed successfully")
+                
+                # Parse results
+                return self._parse_guidellm_results(results_file)
+                
+            finally:
+                # Clean up process reference
+                self._process = None
         except subprocess.TimeoutExpired as e:
+            # Terminate the benchmark process
+            if self._process:
+                self._logger.warning("GuideLLM timed out, terminating process")
+                self.terminate_benchmark()
             raise RuntimeError(
                 f"GuideLLM benchmark timed out after {config.max_seconds + 120} seconds"
             ) from e
@@ -199,6 +230,7 @@ class GuideLLMBenchmark(BenchmarkProvider):
             data_config = {
                 "prompt_tokens": config.prompt_tokens,
                 "output_tokens": config.output_tokens,
+                "samples": 100 if config.samples is None else config.samples
             }
 
             # Only add statistical distribution parameters if they were explicitly

@@ -41,6 +41,12 @@ class BaseTrialController(TrialController):
         self.benchmark_provider: Optional[BenchmarkProvider] = None
         self._environment_validated = False
         self.trial_loggers = {}  # Dict to hold trial-specific loggers
+        self._health_monitor_thread = None
+        self._health_monitor_stop = False
+        self._health_check_url = None
+        self._health_check_failed = False
+        self._health_check_failure_reason = None
+        self._benchmark_process = None  # Track running benchmark process
 
     def _validate_environment(self, trial_config: Optional[TrialConfig] = None) -> None:
         """Validate that all required packages are available on this worker."""
@@ -285,6 +291,15 @@ class BaseTrialController(TrialController):
                 server_info["url"], trial_config.vllm_startup_timeout
             )
 
+            # Start health monitoring after server is ready
+            health_url = server_info["url"].replace("/v1", "/health")
+            controller_logger.info("Starting runtime health monitoring")
+            self._start_health_monitoring(
+                health_url,
+                check_interval=trial_config.health_check_interval,
+                max_failures=trial_config.health_check_max_failures,
+            )
+
             # Run benchmark
             controller_logger.info("Starting benchmark run")
             benchmark_logger = self._get_trial_logger("benchmark")
@@ -302,6 +317,9 @@ class BaseTrialController(TrialController):
             benchmark_result = self.benchmark_provider.run_benchmark(
                 model_url=server_info["url"], config=trial_config.benchmark_config
             )
+
+            # Check if vLLM server died during benchmark execution
+            self._check_health_status()
 
             # Extract objectives for Optuna using optimization configuration
             objective_values = self._extract_objectives(
@@ -568,6 +586,15 @@ class BaseTrialController(TrialController):
         )
 
         while time.time() - start_time < timeout:
+            # Check if vLLM process has died during startup
+            if self.vllm_process and self.vllm_process.poll() is not None:
+                vllm_logger.error(
+                    f"vLLM process died during startup with exit code {self.vllm_process.returncode}"
+                )
+                raise RuntimeError(
+                    f"vLLM process died during startup with exit code {self.vllm_process.returncode}"
+                )
+            
             try:
                 response = requests.get(health_url, timeout=5)
                 if response.status_code == 200:
@@ -580,6 +607,148 @@ class BaseTrialController(TrialController):
 
         vllm_logger.error(f"vLLM server failed to start within {timeout} seconds")
         raise RuntimeError(f"vLLM server failed to start within {timeout} seconds")
+
+    def _start_health_monitoring(
+        self, health_url: str, check_interval: int = 30, max_failures: int = 3
+    ):
+        """
+        Start background health monitoring of vLLM server.
+        
+        Args:
+            health_url: URL to check for health status
+            check_interval: Seconds between health checks (default: 30)
+            max_failures: Number of consecutive failures before marking as dead (default: 3)
+        
+        Environment Variables:
+            VLLM_HEALTH_CHECK_DEBUG: Set to '1' or 'true' to enable verbose logging
+        """
+        import requests
+        import threading
+
+        # TODO: Remove debug logging after verifying health monitoring works in production
+        # Set VLLM_HEALTH_CHECK_DEBUG=1 to enable verbose logging
+        debug = os.environ.get("VLLM_HEALTH_CHECK_DEBUG", "").lower() in ("1", "true", "yes")
+
+        self._health_check_url = health_url
+        self._health_monitor_stop = False
+        self._health_check_failed = False
+        self._health_check_failure_reason = None
+
+        vllm_logger = self._get_trial_logger("vllm")
+
+        def monitor_health():
+            consecutive_failures = 0
+            check_count = 0  # TODO: Remove after verifying health monitoring works
+            vllm_logger.info(
+                f"Starting health monitoring: checking {health_url} every {check_interval}s"
+                + (f" (DEBUG MODE: verbose logging enabled)" if debug else "")
+            )
+
+            while not self._health_monitor_stop:
+                check_count += 1  # TODO: Remove after verifying health monitoring works
+                
+                # Check if vLLM process itself has died
+                if self.vllm_process and self.vllm_process.poll() is not None:
+                    self._health_check_failed = True
+                    self._health_check_failure_reason = (
+                        f"vLLM process died unexpectedly with exit code {self.vllm_process.returncode}"
+                    )
+                    vllm_logger.error(
+                        f"Health monitoring detected process death: "
+                        f"exit code {self.vllm_process.returncode}"
+                    )
+                    # Terminate running benchmark immediately
+                    self._terminate_benchmark()
+                    break
+                
+                try:
+                    response = requests.get(health_url, timeout=5)
+                    if response.status_code == 200:
+                        # TODO: Remove debug logging after verifying health monitoring works
+                        if debug:
+                            vllm_logger.info(
+                                f"[DEBUG] Health check #{check_count} PASSED: "
+                                f"status={response.status_code}, consecutive_failures={consecutive_failures}"
+                            )
+                        # Health check passed - reset failure counter
+                        if consecutive_failures > 0:
+                            vllm_logger.info(
+                                f"Health check recovered after {consecutive_failures} failures"
+                            )
+                        consecutive_failures = 0
+                    else:
+                        consecutive_failures += 1
+                        vllm_logger.warning(
+                            f"Health check returned status {response.status_code} "
+                            f"(failure {consecutive_failures}/{max_failures})"
+                        )
+                except requests.exceptions.RequestException as e:
+                    consecutive_failures += 1
+                    # TODO: Remove debug logging after verifying health monitoring works
+                    log_msg = f"Health check failed: {e} (failure {consecutive_failures}/{max_failures})"
+                    if debug:
+                        log_msg = f"[DEBUG] Health check #{check_count} FAILED: {log_msg}"
+                    vllm_logger.warning(log_msg)
+                except Exception as e:
+                    consecutive_failures += 1
+                    # TODO: Remove debug logging after verifying health monitoring works
+                    log_msg = f"Unexpected health check error: {e} (failure {consecutive_failures}/{max_failures})"
+                    if debug:
+                        log_msg = f"[DEBUG] Health check #{check_count} ERROR: {log_msg}"
+                    vllm_logger.warning(log_msg)
+
+                # Check if we've exceeded max failures
+                if consecutive_failures >= max_failures:
+                    self._health_check_failed = True
+                    self._health_check_failure_reason = (
+                        f"vLLM server failed {consecutive_failures} consecutive health checks"
+                    )
+                    vllm_logger.error(
+                        f"Health monitoring detected server failure: {self._health_check_failure_reason}"
+                    )
+                    # Terminate running benchmark immediately
+                    self._terminate_benchmark()
+                    break
+
+                # Wait before next check (but check stop flag periodically)
+                for _ in range(check_interval):
+                    if self._health_monitor_stop:
+                        break
+                    time.sleep(1)
+
+            vllm_logger.info("Health monitoring stopped")
+
+        self._health_monitor_thread = threading.Thread(
+            target=monitor_health, daemon=True, name="vllm-health-monitor"
+        )
+        self._health_monitor_thread.start()
+        vllm_logger.info("Health monitoring thread started")
+
+    def _stop_health_monitoring(self):
+        """Stop the health monitoring thread."""
+        if self._health_monitor_thread and self._health_monitor_thread.is_alive():
+            vllm_logger = self._get_trial_logger("vllm")
+            vllm_logger.info("Stopping health monitoring thread")
+            self._health_monitor_stop = True
+            # Give the thread a moment to stop gracefully
+            self._health_monitor_thread.join(timeout=5)
+            if self._health_monitor_thread.is_alive():
+                vllm_logger.warning("Health monitoring thread did not stop gracefully")
+
+    def _terminate_benchmark(self):
+        """Terminate the running benchmark process if vLLM has failed."""
+        if self.benchmark_provider and hasattr(self.benchmark_provider, "terminate_benchmark"):
+            try:
+                self.benchmark_provider.terminate_benchmark()
+            except Exception as e:
+                logger.warning(f"Failed to terminate benchmark: {e}")
+
+    def _check_health_status(self):
+        """Check if health monitoring has detected a failure."""
+        if self._health_check_failed:
+            raise RuntimeError(
+                f"vLLM server health check failed: {self._health_check_failure_reason}"
+            )
 
     def _extract_objectives(
         self, benchmark_result: dict, optimization_config=None
@@ -621,7 +790,10 @@ class BaseTrialController(TrialController):
         return objective_values
 
     def cleanup_resources(self):
-        """Clean up vLLM server process."""
+        """Clean up vLLM server process and health monitoring."""
+        # Stop health monitoring first
+        self._stop_health_monitoring()
+        
         if self.vllm_process:
             pid = self.vllm_process.pid
             try:
