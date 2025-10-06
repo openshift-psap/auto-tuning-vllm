@@ -1,0 +1,58 @@
+# Example study configuration for MLPerf benchmark provider
+study:
+  name: "mlperf_optimization_study"
+
+optimization:
+  approach: "single_objective"
+  objective:
+    metric: "output_tokens_per_second"  # Maximize throughput
+    direction: "maximize"
+  sampler: "gp"
+  n_trials: 100
+  max_concurrent: 1  # MLPerf typically runs single instance benchmarks
+
+benchmark:
+  benchmark_type: "mlperf"  # Use MLPerf provider
+  model: "meta-llama/Llama-3.1-8B"
+  max_seconds: 600  # MLPerf may need longer runtime
+  dataset: "/path/to/dataset"  # Path to MLPerf dataset (required)
+
+  # MLPerf-specific configuration
+  _mlperf_target_qps: 9.0 # Target queries per second for MLPerf
+  _mlperf_test_mode: "performance"  # "performance" or "accuracy"
+  _mlperf_cmd_path: "/path/to/mlperf/sut"  # Path to MLPerf inference script
+  _mlperf_conf_path: "/path/to/mlperf/conf"  # Path to MLPerf user configuration
+
+logging:
+  file_path: "/tmp/auto-tune-vllm-mlperf/logs"
+  log_level: "INFO"
+
+baseline:
+  enabled: true
+  run_first: true
+  concurrency_levels: [1]
+
+parameters: # parameters to optimize for MLPerf workloads
+  gpu_memory_utilization:
+    enabled: true
+    min: 0.9
+    max: 0.95
+    step: 0.01
+
+  kv_cache_dtype:
+    enabled: true
+    options: ["fp8"]
+
+  long_prefill_token_threshold:
+    enabled: true
+    options: [0, 256, 512, 1024, 2048, 4096, 8192] 
+
+  max_num_partial_prefills:
+    enabled: true
+    options: [1, 2, 4, 8]
+
+  cuda_graph_sizes:
+    enabled: true
+    min: 8
+    max: 8192
+    step: 128
