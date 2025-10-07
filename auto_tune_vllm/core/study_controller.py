@@ -607,6 +607,19 @@ class StudyController:
             # Increasing the timeout for vLLM startup
             trial_config.vllm_startup_timeout = int(self.config.static_environment_variables.get("VLLM_STARTUP_TIMEOUT", 300))
 
+            # Check constraints before submitting trial
+            if len(self.config.constraints) > 0:
+                constraint_violated = self._check_constraints(trial_config.parameters)
+                if constraint_violated:
+                    logger.info(
+                        f"Trial {trial.number} violates constraints, pruning. "
+                        f"Parameters: {trial.params}"
+                    )
+                    # Mark trial as pruned in Optuna
+                    self.study.tell(trial.number, state=optuna.trial.TrialState.PRUNED)
+                    remaining_trials -= 1
+                    continue
+
             try:
                 job_handle = self.backend.submit_trial(trial_config)
                 self.active_trials[trial_config.trial_id] = job_handle
@@ -726,6 +739,30 @@ class StudyController:
                 )
                 return True
 
+    def _check_constraints(self, parameters: Dict) -> bool:
+        """
+        Check if any constraint is violated.
+
+        Args:
+            parameters: Dictionary of parameter names to values
+
+        Returns:
+            True if any constraint is violated (evaluates to > 0), False otherwise
+        """
+        for constraint in self.config.constraints:
+            try:
+                result = constraint.evaluate_constraint(parameters)
+                if result > 0:
+                    logger.debug(
+                        f"Constraint violated: {constraint.expression} = {result} > 0"
+                    )
+                    return True
+            except Exception as e:
+                logger.warning(
+                    f"Failed to evaluate constraint '{constraint.expression}': {e}. "
+                    f"Treating as violated."
+                )
+                return True
         return False
 
     def _build_trial_config(self, trial: optuna.Trial) -> TrialConfig:

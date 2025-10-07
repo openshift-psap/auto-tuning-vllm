@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional, Union
 
 import yaml
 
+from auto_tune_vllm.core.constraint import Constraint
+
 from ..benchmarks.config import BenchmarkConfig
 from .parameters import (
     BooleanParameter,
@@ -290,6 +292,7 @@ class StudyConfig:
     use_explicit_name: bool = (
         False  # Flag to indicate explicit name usage (affects load_if_exists behavior)
     )
+    constraints: list[Constraint] = field(default_factory=list)
 
     @classmethod
     def from_file(
@@ -719,6 +722,17 @@ class ConfigValidator:
                 enabled=True, concurrency_levels=[benchmark.rate]
             )
 
+        # Handle constraint parsing
+        constraints = None
+        if "constraints" in raw_config:
+            constraint_data = raw_config["constraints"]
+            if constraint_data is not None:
+                if not isinstance(constraint_data, list):
+                    raise TypeError(
+                        "Constraints must be provided as a list of expression strings"
+                    )
+                constraints = [Constraint(expression=expr) for expr in constraint_data]
+
         return StudyConfig(
             study_name=study_name,
             database_url=database_url,
@@ -732,6 +746,7 @@ class ConfigValidator:
             storage_file=storage_file,
             study_prefix=study_prefix,
             use_explicit_name=use_explicit_name,
+            constraints=constraints,
         )
 
     def _build_parameter_config(
