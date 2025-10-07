@@ -161,8 +161,10 @@ class GuideLLMBenchmark(BenchmarkProvider):
             raise e
 
         if not os.path.exists(results_file):
-            raise RuntimeError(f"GuideLLM results file not found after completion: {results_file}")
-        
+            if not os.path.exists(results_file):
+                raise RuntimeError(
+                    f"GuideLLM results file not found after completion: {results_file}"
+                )
         # Parse results
         return self._parse_guidellm_results(results_file)
 
