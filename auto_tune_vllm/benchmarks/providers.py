@@ -119,50 +119,50 @@ class GuideLLMBenchmark(BenchmarkProvider):
                 stderr=subprocess.PIPE,
                 text=True
             )
+
+            stdout, stderr, returncode = None, None, None
             
             try:
                 # Wait for completion with timeout
                 stdout, stderr = self._process.communicate(
                     timeout=config.max_seconds * 1.5
                 )
-                
-                # Log GuideLLM output for debugging
-                if stdout:
-                    self._logger.info(f"GuideLLM stdout:\n{stdout}")
-                if stderr:
-                    self._logger.warning(f"GuideLLM stderr:\n{stderr}")
-                
-                # Check return code
-                if self._process.returncode != 0:
-                    raise subprocess.CalledProcessError(
-                        self._process.returncode, cmd, stdout, stderr
-                    )
-                
-                self._logger.debug(
-                    f"GuideLLM process completed with return code: "
-                    f"{self._process.returncode}"
-                )
-                self._logger.info("GuideLLM completed successfully")
-                
-                # Parse results
-                return self._parse_guidellm_results(results_file)
-                
-            finally:
-                # Clean up process reference
-                self._process = None
-        except subprocess.TimeoutExpired as e:
-            # Terminate the benchmark process
-            if self._process:
+                returncode = self._process.returncode
+            
+            except subprocess.TimeoutExpired as e:
                 self._logger.warning("GuideLLM timed out, terminating process")
                 self.terminate_benchmark()
-            raise RuntimeError(
-                f"GuideLLM benchmark timed out after {config.max_seconds + 120} seconds"
-            ) from e
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"GuideLLM failed: {e.stderr}") from e
-        except OSError as e:
-            # e.g., FileNotFoundError for the CLI
-            raise RuntimeError("Failed to execute GuideLLM CLI") from e
+                raise RuntimeError(
+                    f"GuideLLM benchmark timed out after {config.max_seconds * 1.5} seconds"
+                ) from e
+
+            finally:
+                self._process = None
+            
+            if stdout is not None:
+                self._logger.info(f"GuideLLM stdout:\n{stdout}")
+            if stderr is not None:
+                self._logger.warning(f"GuideLLM stderr:\n{stderr}")
+            if returncode is not None and returncode != 0:
+                raise subprocess.CalledProcessError(
+                    returncode, cmd, stdout, stderr
+                )
+
+            self._logger.debug(
+                f"GuideLLM process completed with return code: "
+                f"{returncode}"
+            )
+            self._logger.info("GuideLLM completed successfully")
+        
+        except Exception as e:
+            self._logger.error(f"Error during GuideLLM benchmark: {e}")
+            raise e
+
+        if not os.path.exists(results_file):
+            raise RuntimeError(f"GuideLLM results file not found after completion: {results_file}")
+        
+        # Parse results
+        return self._parse_guidellm_results(results_file)
 
     def _get_results_file_path(self) -> str:
         """

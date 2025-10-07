@@ -736,10 +736,7 @@ class BaseTrialController(TrialController):
                     break
 
                 # Wait before next check (but check stop flag periodically)
-                for _ in range(check_interval):
-                    if self._health_monitor_stop:
-                        break
-                    time.sleep(1)
+                time.sleep(check_interval)
 
             vllm_logger.info("Health monitoring stopped")
 
