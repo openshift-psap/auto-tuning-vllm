@@ -721,7 +721,10 @@ class BaseTrialController(TrialController):
                     vllm_logger.warning(log_msg)
 
                 # Check if we've exceeded max failures
-                if consecutive_failures >= max_failures:
+                if (
+                    max_failures > 0
+                    and consecutive_failures >= max_failures
+                ):
                     self._health_check_failed = True
                     self._health_check_failure_reason = (
                         f"vLLM server failed {consecutive_failures} consecutive "
