@@ -133,7 +133,9 @@ class GuideLLMBenchmark(BenchmarkProvider):
                 self._logger.warning("GuideLLM timed out, terminating process")
                 self.terminate_benchmark()
                 raise RuntimeError(
-                    f"GuideLLM benchmark timed out after {config.max_seconds * 1.5} seconds"
+                timeout_seconds = config.max_seconds * 1.5
+                raise RuntimeError(
+                    f"GuideLLM benchmark timed out after {timeout_seconds} seconds"
                 ) from e
 
             finally:
