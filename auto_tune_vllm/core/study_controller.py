@@ -22,7 +22,7 @@ from ..logging.manager import CentralizedLogger
 from .config import StudyConfig
 from .db_utils import create_database_if_not_exists, verify_database_connection
 from .parameters import EnvironmentParameter, ListParameter, RangeParameter
-from .trial import TrialConfig
+from .trial import TrialConfig, TrialResult
 
 logger = logging.getLogger(__name__)
 
@@ -629,6 +629,13 @@ class StudyController:
                     result.trial_type == "optimization"
                     and result.trial_number is not None
                 ):
+                    # Store trial metadata in database BEFORE calling study.tell()
+                    # (trials get locked after tell() and can't be updated)
+                    print(f"[DEBUG] About to store user attributes for trial {result.trial_number}")
+                    logger.info(f"Storing user attributes for trial {result.trial_number}")
+                    self._set_trial_user_attributes(result.trial_number, result)
+                    print(f"[DEBUG] Finished storing user attributes for trial {result.trial_number}")
+
                     if result.success and result.objective_values:
                         self.study.tell(result.trial_number, result.objective_values)
                         logger.info(
@@ -680,6 +687,32 @@ class StudyController:
             optimization_config=self.config.optimization,
             logging_config=self.config.logging_config,
         )
+
+    def _set_trial_user_attributes(self, trial_number: int, result: TrialResult):
+        """Store trial error information in Optuna database via user attributes."""
+        try:
+            # Get the trial_id for the given trial_number
+            trial = self.study.trials[trial_number]
+            trial_id = trial._trial_id
+            
+            # Store error information for failed trials only
+            if not result.success:
+                self.study._storage.set_trial_user_attr(
+                    trial_id, "error_type", result.error_type
+                )
+                self.study._storage.set_trial_user_attr(
+                    trial_id, "error_message", result.error_message
+                )
+                logger.info(
+                    f"Stored error attributes for failed trial {trial_number} "
+                    f"(type: {result.error_type})"
+                )
+            
+        except Exception as e:
+            logger.error(
+                f"Failed to store user attributes for trial {trial_number}: {e}",
+                exc_info=True
+            )
 
     def get_best_baseline_result(self) -> Optional[List[float]]:
         """Get the best baseline result for comparison."""

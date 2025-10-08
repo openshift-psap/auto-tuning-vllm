@@ -8,7 +8,7 @@ import signal
 import subprocess
 import time
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import List, Optional
 
 import ray
 
@@ -39,6 +39,7 @@ class BaseTrialController(TrialController):
     def __init__(self):
         self.vllm_process: Optional[subprocess.Popen] = None
         self.benchmark_provider: Optional[BenchmarkProvider] = None
+        self._vllm_log_buffer: List[str] = []  # Buffer to store vLLM logs for analysis
         self._environment_validated = False
         self.trial_loggers = {}  # Dict to hold trial-specific loggers
         self._health_monitor_thread = None
@@ -229,6 +230,9 @@ class BaseTrialController(TrialController):
     def run_trial(self, trial_config: TrialConfig) -> TrialResult:
         """Execute trial with proper error handling and cleanup."""
         execution_info = ExecutionInfo()
+        
+        # Clear log buffer from previous trial
+        self._vllm_log_buffer = []
 
         print(
             f"Running trial {trial_config.trial_id} "
@@ -346,6 +350,9 @@ class BaseTrialController(TrialController):
             error_logger = self._get_trial_logger("controller")
             error_logger.error(f"Trial {trial_config.trial_id} failed: {e}")
 
+            # Classify error
+            error_type = self._classify_error(e)
+            
             return TrialResult(
                 trial_id=trial_config.trial_id,
                 trial_number=trial_config.trial_number,
@@ -355,6 +362,8 @@ class BaseTrialController(TrialController):
                 execution_info=execution_info,
                 success=False,
                 error_message=str(e),
+                error_type=error_type,
+               
             )
         finally:
             # Flush any buffered logs before cleanup
@@ -550,6 +559,11 @@ class BaseTrialController(TrialController):
                 for line in iter(self.vllm_process.stdout.readline, ""):
                     if line.strip():
                         vllm_logger.info(line.strip())
+                        # Also buffer logs for attention backend detection
+                        # Keep last 100 lines to avoid memory issues
+                        self._vllm_log_buffer.append(line.strip())
+                        if len(self._vllm_log_buffer) > 100:
+                            self._vllm_log_buffer.pop(0)
             except Exception as e:
                 vllm_logger.error(f"Error capturing vLLM output: {e}")
 
@@ -573,6 +587,39 @@ class BaseTrialController(TrialController):
 
         return port
 
+    def _extract_vllm_error_from_logs(self) -> str:
+        """Extract the actual error message from vLLM log buffer."""
+        if not hasattr(self, '_vllm_log_buffer') or not self._vllm_log_buffer:
+            return "No vLLM logs captured"
+        
+        # Look for the most critical error line
+        critical_error = None
+        for line in self._vllm_log_buffer:
+            line_lower = line.lower()
+            # Find the root cause error (ValueEr ror, RuntimeError, OOM, etc.)
+            if any(indicator in line_lower for indicator in [
+                'valueerror:', 'runtimeerror:', 'typeerror:', 'assertionerror:',
+                'outofmemoryerror:', 'cuda error:', 'free memory on device'
+            ]):
+                critical_error = line
+                break  # First critical error is usually the root cause
+        
+        if critical_error:
+            # Return just the critical error line (concise)
+            # Truncate to 500 chars max
+            return critical_error[:500]
+        
+        # No critical error found, look for any ERROR line
+        for line in reversed(self._vllm_log_buffer):
+            if 'error' in line.lower():
+                return line[:500]
+        
+        # No errors found, return last line
+        if self._vllm_log_buffer:
+            return self._vllm_log_buffer[-1][:500]
+        
+        return "No vLLM logs captured"
+    
     def _wait_for_server_ready(self, url: str, timeout: int = 300):
         """Wait for vLLM server to be ready."""
         import requests
@@ -588,13 +635,17 @@ class BaseTrialController(TrialController):
         while time.time() - start_time < timeout:
             # Check if vLLM process has died during startup
             if self.vllm_process and self.vllm_process.poll() is not None:
+                # Capture the actual error from vLLM logs
+                error_details = self._extract_vllm_error_from_logs()
+                
                 vllm_logger.error(
                     f"vLLM process died during startup with exit code "
                     f"{self.vllm_process.returncode}"
                 )
+                vllm_logger.error(f"vLLM error details:\n{error_details}")
+                
                 raise RuntimeError(
-                    f"vLLM process died during startup with exit code "
-                    f"{self.vllm_process.returncode}"
+                    f"vLLM startup failed: {error_details}"
                 )
             
             try:
@@ -816,6 +867,48 @@ class BaseTrialController(TrialController):
 
         return objective_values
 
+    def _classify_error(self, exception: Exception) -> str:
+        """Classify errors into categories for better analysis."""
+        error_msg = str(exception).lower()
+        
+        if any(phrase in error_msg for phrase in [
+            "cuda out of memory", "outofmemoryerror", "out of memory",
+            "cuda error: out of memory", "memory allocation failed"
+        ]):
+            return "OOM"
+        elif any(phrase in error_msg for phrase in [
+            "free memory on device", "less than desired gpu memory utilization",
+            "decrease gpu memory utilization", "gpu memory used by other processes",
+            "insufficient gpu memory", "not enough gpu memory"
+        ]):
+            return "GPU_Memory_Insufficient"
+        elif any(phrase in error_msg for phrase in [
+            "timeout", "timed out", "time out"
+        ]):
+            return "Timeout"
+        elif any(phrase in error_msg for phrase in [
+            "cuda error", "cuda runtime error", "cuda driver error"
+        ]):
+            return "CUDA_Error"
+        elif any(phrase in error_msg for phrase in [
+            "connection", "connection refused", "connection reset",
+            "connection aborted", "connection timeout"
+        ]):
+            return "Connection_Error"
+        elif any(phrase in error_msg for phrase in [
+            "server startup", "failed to start", "startup failed",
+            "application startup", "server did not start", "died during startup",
+            "process died", "exited unexpectedly"
+        ]):
+            return "Server_Startup_Failure"
+        elif any(phrase in error_msg for phrase in [
+            "benchmark", "guidellm", "performance test"
+        ]):
+            return "Benchmark_Error"
+        else:
+            return "Unknown_Error"
+
+    
     def cleanup_resources(self):
         """Clean up vLLM server process and health monitoring."""
         # Stop health monitoring first
