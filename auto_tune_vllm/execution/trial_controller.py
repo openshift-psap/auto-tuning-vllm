@@ -540,6 +540,7 @@ class BaseTrialController(TrialController):
             bufsize=1,  # Line buffered
             universal_newlines=True,
             env=env,  # Pass environment variables to the process
+            start_new_session=True,  # Put child in its own process group/session
         )
 
         # Start a thread to capture and log vLLM output
@@ -823,31 +824,49 @@ class BaseTrialController(TrialController):
         
         if self.vllm_process:
             pid = self.vllm_process.pid
+            # Try to resolve the child's process group id upfront. If the process
+            # has already exited, fall back to signaling the process directly.
+            try:
+                pgid = os.getpgid(pid)
+            except Exception:
+                pgid = None
+
             try:
                 # Send SIGINT first for graceful cleanup (what vLLM expects)
                 logger.info(
-                    f"Sending SIGINT to vLLM process {pid} for graceful shutdown"
+                    f"Sending SIGINT to vLLM process {pid} for graceful shutdown at time: {time.time()}"
                 )
-                self.vllm_process.send_signal(signal.SIGINT)
+                if pgid is not None:
+                    # Signal the entire process group so children exit too
+                    os.killpg(pgid, signal.SIGINT)
+                else:
+                    self.vllm_process.send_signal(signal.SIGINT)
                 self.vllm_process.wait(
-                    timeout=15
+                    timeout=120
                 )  # Give more time for graceful cleanup
                 logger.info(f"Gracefully terminated vLLM process {pid}")
             except subprocess.TimeoutExpired:
+
                 # If graceful shutdown fails, then use SIGTERM
                 logger.warning(f"Graceful shutdown timed out, sending SIGTERM to {pid}")
-                self.vllm_process.terminate()
+                if pgid is not None:
+                    os.killpg(pgid, signal.SIGTERM)
+                else:
+                    self.vllm_process.terminate()
                 try:
                     self.vllm_process.wait(timeout=5)
-                    logger.info(f"Terminated vLLM process {pid} with SIGTERM")
+                    logger.info(f"Terminated vLLM process {pid} with SIGTERM at time: {time.time()}")
                 except subprocess.TimeoutExpired:
                     # Last resort: kill entire process group to catch multiprocessing
                     # children
-                    logger.warning(f"SIGTERM timeout, killing process group for {pid}")
+                    logger.warning(f"SIGTERM timeout, killing process group for {pid} at time: {time.time()}")
                     try:
                         # Kill the entire process group (negative PID)
-                        os.killpg(os.getpgid(pid), signal.SIGKILL)
-                        logger.info(f"Killed process group for {pid}")
+                        if pgid is not None:
+                            os.killpg(pgid, signal.SIGKILL)
+                        else:
+                            os.killpg(os.getpgid(pid), signal.SIGKILL)
+                            logger.info(f"Killed process group for {pid}")
                     except (OSError, ProcessLookupError) as e:
                         logger.warning(f"Failed to kill process group for {pid}: {e}")
                         # Fallback to regular kill if killpg fails
