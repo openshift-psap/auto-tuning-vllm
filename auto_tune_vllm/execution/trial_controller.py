@@ -845,11 +845,22 @@ class BaseTrialController(TrialController):
                     )
                     try:
                         # Kill the entire process group (negative PID)
+                    try:
+                        # Kill the entire process group (negative PID)
                         if pgid is not None:
                             os.killpg(pgid, signal.SIGKILL)
                         else:
-                            os.killpg(os.getpgid(pid), signal.SIGKILL)
-                            logger.info(f"Killed process group for {pid}")
+                            # pgid unavailable, kill process directly
+                            self.vllm_process.kill()
+                            logger.info(f"Force killed vLLM process {pid}")
+                    except (OSError, ProcessLookupError) as e:
+                        logger.warning(f"Failed to kill process group for {pid}: {e}")
+                        # Fallback to regular kill if killpg fails
+                        try:
+                            self.vllm_process.kill()
+                            logger.warning(f"Force killed vLLM process {pid}")
+                        except (OSError, ProcessLookupError):
+                            logger.warning(f"Process {pid} already dead")
                     except (OSError, ProcessLookupError) as e:
                         logger.warning(f"Failed to kill process group for {pid}: {e}")
                         # Fallback to regular kill if killpg fails
