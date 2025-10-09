@@ -236,31 +236,7 @@ class BaseTrialController(TrialController):
         )
         print(f"Study name: {trial_config.study_name}")
 
-        print("")
 
-        # If the parallelism is set lower than MIN_GPUS in the
-        # static_environment_variables, cannot start the trial
-        # if trial_config.parameters.get(
-        #     "tensor_parallel_size"
-        # ) < trial_config.static_environment_variables.get("MIN_GPUS"):
-        #     logger.error(
-        #         f"Trial {trial_config.trial_id} cannot start "
-        #         f"because the parallelism is set lower than MIN_GPUS "
-        #         f" in the static_environment_variables"
-        #     )
-        #     return TrialResult(
-        #         trial_id=trial_config.trial_id,
-        #         trial_number=trial_config.trial_number,
-        #         trial_type=trial_config.trial_type,
-        #         objective_values=[],
-        #         detailed_metrics={},
-        #         execution_info=execution_info,
-        #         success=False,
-        #         error_message=(
-        #             "Parallelism is set lower than MIN_GPUS "
-        #             "in the static_environment_variables"
-        #         ),
-        #     )
 
         try:
             # Store study name for log flushing
@@ -834,7 +810,8 @@ class BaseTrialController(TrialController):
             try:
                 # Send SIGINT first for graceful cleanup (what vLLM expects)
                 logger.info(
-                    f"Sending SIGINT to vLLM process {pid} for graceful shutdown at time: {time.time()}"
+                    f"Sending SIGINT to vLLM process {pid} for graceful cleanup "
+                    f"at time: {time.time()}"
                 )
                 if pgid is not None:
                     # Signal the entire process group so children exit too
@@ -855,11 +832,17 @@ class BaseTrialController(TrialController):
                     self.vllm_process.terminate()
                 try:
                     self.vllm_process.wait(timeout=5)
-                    logger.info(f"Terminated vLLM process {pid} with SIGTERM at time: {time.time()}")
+                    logger.info(
+                        f"Terminated vLLM process {pid} with SIGTERM at time: "
+                        f"{time.time()}"
+                    )
                 except subprocess.TimeoutExpired:
                     # Last resort: kill entire process group to catch multiprocessing
                     # children
-                    logger.warning(f"SIGTERM timeout, killing process group for {pid} at time: {time.time()}")
+                    logger.warning(
+                        f"SIGTERM timeout, killing process group for {pid} at time: "
+                        f"{time.time()}"
+                    )
                     try:
                         # Kill the entire process group (negative PID)
                         if pgid is not None:
