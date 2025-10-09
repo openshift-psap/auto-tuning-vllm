@@ -446,6 +446,7 @@ class StudyController:
                 f"Unknown sampler '{sampler_name}'. Supported samplers: "
                 "tpe, random, gp, botorch, nsga2, grid"
             )
+
     @staticmethod
     def _calculate_grid_size(search_space: Dict) -> int:
         """Calculate total grid search combinations."""
@@ -602,7 +603,11 @@ class StudyController:
             except Exception as e:
                 logger.error(f"Failed to submit trial {trial.number}: {e}")
                 # Mark trial as failed in Optuna
-                self.study.tell(trial.number, None)  # Failed trial
+                self.study.tell(
+                    trial=trial.number,
+                    values=None,
+                    state=optuna.trial.TrialState.FAIL,
+                )  # Failed trial
                 break
 
     def _collect_completed_trials(self) -> int:
@@ -630,14 +635,22 @@ class StudyController:
                     and result.trial_number is not None
                 ):
                     if result.success and result.objective_values:
-                        self.study.tell(result.trial_number, result.objective_values)
+                        self.study.tell(
+                            trial=result.trial_number,
+                            values=result.objective_values,
+                            state=optuna.trial.TrialState.COMPLETE,
+                        )
                         logger.info(
                             f"Trial {trial_id} completed successfully: "
                             f"{result.objective_values}"
                         )
                     else:
                         # Failed trial
-                        self.study.tell(result.trial_number, None)
+                        self.study.tell(
+                            trial=result.trial_number,
+                            values=None,
+                            state=optuna.trial.TrialState.FAIL,
+                        )
                         logger.error(f"Trial {trial_id} failed: {result.error_message}")
 
                     # Only count optimization trials toward completion
