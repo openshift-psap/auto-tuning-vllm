@@ -804,7 +804,7 @@ class BaseTrialController(TrialController):
             # has already exited, fall back to signaling the process directly.
             try:
                 pgid = os.getpgid(pid)
-            except Exception:
+            except (OSError, ProcessLookupError):
                 pgid = None
 
             try:
