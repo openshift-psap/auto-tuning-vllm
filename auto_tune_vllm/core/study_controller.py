@@ -697,11 +697,11 @@ class StudyController:
             
             # Store error information for failed trials only
             if not result.success:
-                self.study._storage.set_trial_user_attr(
-                    trial_id, "error_type", result.error_type
+                trial.set_user_attr(
+                    "error_type", result.error_type
                 )
-                self.study._storage.set_trial_user_attr(
-                    trial_id, "error_message", result.error_message
+                trial.set_user_attr(
+                    "error_message", result.error_message
                 )
                 logger.info(
                     f"Stored error attributes for failed trial {trial_number} "
