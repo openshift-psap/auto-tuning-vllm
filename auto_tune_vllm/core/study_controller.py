@@ -40,6 +40,7 @@ class StudyController:
         self.study: optuna.Study = study
         self.config: StudyConfig = config
         self.active_trials: Dict[str, JobHandle] = {}
+        self.trial_objects: Dict[int, optuna.Trial] = {}  # trial_number -> Trial object
         self.completed_trials: int = 0
         self.baseline_results: Dict[
             int, List[float]
@@ -589,6 +590,9 @@ class StudyController:
                 logger.error(f"Failed to get next trial from Optuna: {e}")
                 break
 
+            # Store trial object for later access when reporting results
+            self.trial_objects[trial.number] = trial
+            
             trial_config = self._build_trial_config(trial)
 
             try:
@@ -608,6 +612,9 @@ class StudyController:
                     values=None,
                     state=optuna.trial.TrialState.FAIL,
                 )  # Failed trial
+                # Clean up stored trial object
+                if trial.number in self.trial_objects:
+                    del self.trial_objects[trial.number]
                 break
 
     def _collect_completed_trials(self) -> int:
@@ -636,10 +643,7 @@ class StudyController:
                 ):
                     # Store trial metadata in database BEFORE calling study.tell()
                     # (trials get locked after tell() and can't be updated)
-                    print(f"[DEBUG] About to store user attributes for trial {result.trial_number}")
-                    logger.info(f"Storing user attributes for trial {result.trial_number}")
                     self._set_trial_user_attributes(result.trial_number, result)
-                    print(f"[DEBUG] Finished storing user attributes for trial {result.trial_number}")
 
                     if result.success and result.objective_values:
                         self.study.tell(
@@ -659,6 +663,10 @@ class StudyController:
                             state=optuna.trial.TrialState.FAIL,
                         )
                         logger.error(f"Trial {trial_id} failed: {result.error_message}")
+
+                    # Clean up stored trial object after reporting to Optuna
+                    if result.trial_number in self.trial_objects:
+                        del self.trial_objects[result.trial_number]
 
                     # Only count optimization trials toward completion
                     optimization_completed_count += 1
@@ -704,18 +712,24 @@ class StudyController:
     def _set_trial_user_attributes(self, trial_number: int, result: TrialResult):
         """Store trial error information in Optuna database via user attributes."""
         try:
-            # Get the trial_id for the given trial_number
-            trial = self.study.trials[trial_number]
-            trial_id = trial._trial_id
+            # Get the stored trial object from ask-and-tell
+            # We can't use self.study.trials[trial_number] because the trial
+            # isn't added to that list until after tell() is called
+            if trial_number not in self.trial_objects:
+                logger.warning(
+                    f"Trial {trial_number} not found in trial_objects cache, "
+                    f"skipping user attribute storage"
+                )
+                return
+            
+            trial = self.trial_objects[trial_number]
             
             # Store error information for failed trials only
             if not result.success:
-                trial.set_user_attr(
-                    "error_type", result.error_type
-                )
-                trial.set_user_attr(
-                    "error_message", result.error_message
-                )
+                # Use public API on the stored trial object
+                # This works before tell() because we have the trial object from ask()
+                trial.set_user_attr("error_type", result.error_type)
+                trial.set_user_attr("error_message", result.error_message)
                 logger.info(
                     f"Stored error attributes for failed trial {trial_number} "
                     f"(type: {result.error_type})"
