@@ -1,0 +1,12 @@
+name: Pyright Check
+on: [pull_request]
+jobs:
+  pyright:
+    name: Run Pyright
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jakebailey/pyright-action@v2
+        with:
+          version: 'latest' # Or a specific version like '1.1.311'
+          annotate: 'all'
