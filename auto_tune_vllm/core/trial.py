@@ -164,6 +164,7 @@ class TrialResult:
     execution_info: ExecutionInfo = None
     success: bool = True
     error_message: Optional[str] = None
+    error_type: Optional[str] = None
 
     @property
     def primary_objective(self) -> float:

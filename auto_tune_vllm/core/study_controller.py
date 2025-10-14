@@ -22,7 +22,7 @@ from ..logging.manager import CentralizedLogger
 from .config import StudyConfig
 from .db_utils import create_database_if_not_exists, verify_database_connection
 from .parameters import EnvironmentParameter, ListParameter, RangeParameter
-from .trial import TrialConfig
+from .trial import TrialConfig, TrialResult
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,7 @@ class StudyController:
         self.study: optuna.Study = study
         self.config: StudyConfig = config
         self.active_trials: Dict[str, JobHandle] = {}
+        self.trial_objects: Dict[int, optuna.Trial] = {}
         self.completed_trials: int = 0
         self.baseline_results: Dict[
             int, List[float]
@@ -589,6 +590,9 @@ class StudyController:
                 logger.error(f"Failed to get next trial from Optuna: {e}")
                 break
 
+            # Cache trial object for setting user attributes later
+            self.trial_objects[trial.number] = trial
+
             trial_config = self._build_trial_config(trial)
 
             try:
@@ -608,6 +612,9 @@ class StudyController:
                     values=None,
                     state=optuna.trial.TrialState.FAIL,
                 )  # Failed trial
+                # Clean up cached trial object
+                if trial.number in self.trial_objects:
+                    del self.trial_objects[trial.number]
                 break
 
     def _collect_completed_trials(self) -> int:
@@ -634,6 +641,9 @@ class StudyController:
                     result.trial_type == "optimization"
                     and result.trial_number is not None
                 ):
+                    
+                    self._set_trial_user_attributes(result.trial_number, result)
+
                     if result.success and result.objective_values:
                         self.study.tell(
                             trial=result.trial_number,
@@ -652,6 +662,10 @@ class StudyController:
                             state=optuna.trial.TrialState.FAIL,
                         )
                         logger.error(f"Trial {trial_id} failed: {result.error_message}")
+
+                   
+                    if result.trial_number in self.trial_objects:
+                        del self.trial_objects[result.trial_number]
 
                     # Only count optimization trials toward completion
                     optimization_completed_count += 1
@@ -693,6 +707,39 @@ class StudyController:
             optimization_config=self.config.optimization,
             logging_config=self.config.logging_config,
         )
+
+    def _set_trial_user_attributes(self, trial_number: int, result: TrialResult):
+        """Store error information as trial user attributes in Optuna database.
+        
+        Stores error_type and error_message in trial_user_attributes table
+        for post-study failure analysis.
+        
+        Why we cache trial objects:
+        - trial objects from study.ask() allow calling set_user_attr() before tell()
+        - self.study.trials[trial_number] doesn't exist until AFTER tell() is called
+        - Uses public API (trial.set_user_attr) to avoid Optuna internal dependencies
+        """
+        if result.success:
+            return  # Only store attributes for failed trials
+
+        try:
+            if trial_number not in self.trial_objects:
+                logger.warning(
+                    f"Trial {trial_number} not in cache, cannot store error attributes"
+                )
+                return
+
+            trial = self.trial_objects[trial_number]
+            trial.set_user_attr("error_type", result.error_type)
+            trial.set_user_attr("error_message", result.error_message)
+            logger.info(
+                f"Stored error attributes for trial {trial_number}: {result.error_type}"
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to store user attributes for trial {trial_number}: {e}",
+                exc_info=True,
+            )
 
     def get_best_baseline_result(self) -> Optional[List[float]]:
         """Get the best baseline result for comparison."""

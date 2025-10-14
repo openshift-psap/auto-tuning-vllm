@@ -36,6 +36,22 @@ class TrialController(ABC):
 class BaseTrialController(TrialController):
     """Base implementation with common trial execution logic."""
 
+    # Error classification patterns for database storage
+    # Maps error types to keyword patterns used by _classify_error()
+    ERROR_PATTERNS = {
+        "OOM": ["out of memory", "outofmemoryerror", "memory allocation failed"],
+        "GPU_Memory": [
+            "gpu memory",
+            "free memory on device",
+            "insufficient gpu memory",
+        ],
+        "Timeout": ["timeout", "timed out"],
+        "CUDA_Error": ["cuda error", "cuda runtime error"],
+        "Connection_Error": ["connection refused", "connection reset"],
+        "Server_Startup": ["server startup", "failed to start", "died during startup"],
+        "Benchmark_Error": ["benchmark", "guidellm"],
+    }
+
     def __init__(self):
         self.vllm_process: Optional[subprocess.Popen] = None
         self.benchmark_provider: Optional[BenchmarkProvider] = None
@@ -322,6 +338,9 @@ class BaseTrialController(TrialController):
             error_logger = self._get_trial_logger("controller")
             error_logger.error(f"Trial {trial_config.trial_id} failed: {e}")
 
+            # Classify error for database storage
+            error_type = self._classify_error(e)
+
             return TrialResult(
                 trial_id=trial_config.trial_id,
                 trial_number=trial_config.trial_number,
@@ -331,11 +350,29 @@ class BaseTrialController(TrialController):
                 execution_info=execution_info,
                 success=False,
                 error_message=str(e),
+                error_type=error_type,
             )
         finally:
             # Flush any buffered logs before cleanup
             self._flush_trial_logs(trial_config.trial_id)
             self.cleanup_resources()
+
+    def _classify_error(self, exception: Exception) -> str:
+        """Classify error type based on exception message.
+        
+        Uses ERROR_PATTERNS dictionary to categorize exceptions for
+        structured failure analysis in the database.
+        
+        Returns:
+            Error type string (e.g., "OOM", "Timeout") or "Unknown"
+        """
+        error_message = str(exception).lower()
+        
+        for error_type, patterns in self.ERROR_PATTERNS.items():
+            if any(pattern in error_message for pattern in patterns):
+                return error_type
+        
+        return "Unknown"
 
     def _create_benchmark_provider(
         self, trial_config: TrialConfig
