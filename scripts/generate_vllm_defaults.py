@@ -9,7 +9,8 @@ hardcoding values.
 Usage:
     # Activate virtual environment and run:
     source .venv/bin/activate
-    python scripts/generate_vllm_defaults.py [--output path] [--sections section1,section2,...]
+    python scripts/generate_vllm_defaults.py
+            [--output path] [--sections section1,section2,...]
 
     # Or install the package in development mode:
     pip install -e .
@@ -42,7 +43,10 @@ def main():
         "--output",
         "-o",
         default=None,
-        help="Output path for defaults YAML file (default: auto_tune_vllm/schemas/vllm_defaults/v{version}.yaml)",
+        help=(
+            "Output path for defaults YAML file"
+            " (default: auto_tune_vllm/schemas/vllm_defaults/v{version}.yaml)"
+        ),
     )
 
     parser.add_argument(
@@ -63,7 +67,10 @@ def main():
         "--sections",
         "-s",
         default="cacheconfig,schedulerconfig,modelconfig,parallelconfig",
-        help="Comma-separated list of CLI sections to include (default: optimization-relevant sections)",
+        help=(
+            "Comma-separated list of CLI sections to include"
+            " (default: optimization-relevant sections)"
+        ),
     )
 
     parser.add_argument(
@@ -162,7 +169,7 @@ def main():
                 "   Also available as: auto_tune_vllm/schemas/vllm_defaults/latest.yaml"
             )
             print(
-                f"   Use with: StudyConfig.from_file(config_path, vllm_version='{vllm_version}')"
+                f"   Use with: StudyConfig.from_file(config_path, vllm_version='{vllm_version}')"  # noqa: E501
             )
         else:
             print(f"   Use with: ConfigValidator(defaults_path='{output_path}')")
@@ -179,7 +186,7 @@ def main():
                     for i, version in enumerate(versions[:5]):  # Show first 5
                         marker = "→ " if i == 0 else "  "
                         print(
-                            f"   {marker}v{version.version} ({version.total_defaults} defaults)"
+                            f"   {marker}v{version.version} ({version.total_defaults} defaults)"  # noqa: E501
                         )
                     if len(versions) > 5:
                         print(f"   ... and {len(versions) - 5} more versions")
