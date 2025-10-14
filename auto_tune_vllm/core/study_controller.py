@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import time
-from pathlib import Path
 from typing import Dict, List, Optional
 
 import optuna
@@ -20,8 +19,12 @@ from optuna.samplers import (
 from ..execution.backends import ExecutionBackend, JobHandle
 from ..logging.manager import CentralizedLogger
 from .config import StudyConfig
-from .db_utils import create_database_if_not_exists, verify_database_connection
 from .parameters import EnvironmentParameter, ListParameter, RangeParameter
+from .storage.postgres_utils import (
+    create_database_if_not_exists,
+    verify_database_connection,
+)
+from .storage.utils import get_storage
 from .trial import TrialConfig, TrialResult
 
 logger = logging.getLogger(__name__)
@@ -50,43 +53,6 @@ class StudyController:
     def get_study_identifier(study_name: str) -> str:
         """Get study identifier - now just returns the study name for consistency."""
         return study_name
-
-    @classmethod
-    def get_storage(
-        cls,
-        config: StudyConfig,
-        resume_study: bool = False,
-    ) -> tuple[optuna.storages.BaseStorage, str]:
-        # Determine storage backend for Optuna study
-        retry_callback = optuna.storages.RetryFailedTrialCallback(max_retry=0)
-        if config.database_url:
-            return optuna.storages.RDBStorage(
-                url=config.database_url, failed_trial_callback=retry_callback
-            ), "PostgreSQL"
-        elif config.storage_file:
-            # Ensure directory exists for file-based storage
-            storage_path = Path(config.storage_file)
-            if resume_study and not storage_path.exists():
-                raise RuntimeError(
-                    f"Study '{config.study_name}' not found in storage. "
-                    f"Storage file does not exist: {config.storage_file}. "
-                    f"Options:\n"
-                    f"  • Use 'auto-tune-vllm optimize --config <config_file>' "
-                    f"to create a new study\n"
-                    f"  • Verify the study name and storage path are correct"
-                )
-            storage_path.parent.mkdir(parents=True, exist_ok=True)
-            return optuna.storages.RDBStorage(
-                url=f"sqlite:///{config.storage_file}",
-                failed_trial_callback=retry_callback,
-            ), "SQLite File"
-
-        # This should not happen due to validation in config.py,
-        # but fallback to in-memory
-        return optuna.storages.RDBStorage(
-            url="sqlite:///:memory:",
-            failed_trial_callback=retry_callback,
-        ), "in-memory"
 
     @classmethod
     def create_from_config(
@@ -126,8 +92,8 @@ class StudyController:
         # Determine optimization directions for Optuna
         # (works for single and multi-objective)
         directions = config.optimization.optuna_directions
-        storage, storage_type = StudyController.get_storage(config)
-        logger.info(f"Using {storage_type} storage for Optuna study")
+        storage, storage_type = get_storage(config)
+        logger.info(f"Using {storage_type.name} storage for Optuna study")
         if storage:
             logger.info(f"Storage location: {storage}")
 
@@ -268,9 +234,9 @@ class StudyController:
         # Create sampler based on config
         sampler = cls._create_sampler(config)
 
-        storage, storage_type = StudyController.get_storage(config, resume_study=True)
+        storage, storage_type = get_storage(config, resume_study=True)
 
-        logger.info(f"Using {storage_type} storage for resuming Optuna study")
+        logger.info(f"Using {storage_type.name} storage for resuming Optuna study")
         logger.info(f"Storage location: {storage}")
 
         # Try to load existing study - this will fail if the study doesn't exist
