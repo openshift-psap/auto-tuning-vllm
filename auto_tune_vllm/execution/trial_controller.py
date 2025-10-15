@@ -436,7 +436,7 @@ class BaseTrialController(TrialController):
                                 )
                             
                             # Start benchmark as subprocess
-                            benchmark_process = self._start_benchmark_subprocess(
+                            benchmark_process = self.benchmark_provider.start_benchmark(
                                 server_info["url"], trial_config.benchmark_config
                             )
                             benchmark_start_time = time.time()
@@ -468,7 +468,7 @@ class BaseTrialController(TrialController):
                             raise RuntimeError(f"Benchmark failed with exit code {returncode}: {stderr}")
                         
                         # Parse benchmark results
-                        benchmark_result = self._parse_benchmark_results(trial_config.benchmark_config)
+                        benchmark_result = self.benchmark_provider.parse_results()
                         
                         # Check if vLLM server died during benchmark
                         self._check_health_status()
@@ -606,90 +606,6 @@ class BaseTrialController(TrialController):
         except (ImportError, AttributeError) as e:
             raise ValueError(f"Unknown benchmark provider: {benchmark_type}") from e
 
-    def _start_benchmark_subprocess(self, model_url: str, benchmark_config):
-        """Start benchmark as a subprocess (non-blocking).
-        
-        Returns the Popen process object for polling.
-        """
-        from ..benchmarks.config import BenchmarkConfig
-        from pathlib import Path
-        import tempfile
-        
-        # Get results file path
-        if self._trial_context:
-            study_name = self._trial_context.get("study_name")
-            trial_id = self._trial_context.get("trial_id")
-            base_dir = Path("/tmp/auto-tune-vllm-local-run/logs")
-            benchmark_dir = base_dir / study_name / "benchmark_results"
-            benchmark_dir.mkdir(parents=True, exist_ok=True)
-            results_file = str(benchmark_dir / f"{trial_id}_benchmark_results.json")
-        else:
-            # Fallback to temp file
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-                results_file = f.name
-        
-        self._benchmark_results_file = results_file
-        
-        # Build command
-        processor = benchmark_config.processor if benchmark_config.processor else benchmark_config.model
-        cmd = [
-            "guidellm", "benchmark",
-            "--target", model_url,
-            "--model", benchmark_config.model,
-            "--processor", processor,
-            "--rate-type", "concurrent",
-            "--max-seconds", str(benchmark_config.max_seconds),
-            "--rate", str(benchmark_config.rate),
-            "--output-path", results_file,
-            "--processor-args", '{"trust-remote-code":"true"}'
-        ]
-        
-        # Add data configuration (construct from prompt/output tokens)
-        import json
-        data_dict = {
-            "prompt_tokens": benchmark_config.prompt_tokens,
-            "output_tokens": benchmark_config.output_tokens,
-            "samples": benchmark_config.samples
-        }
-        cmd.extend(["--data", json.dumps(data_dict)])
-        
-        benchmark_logger = self._get_trial_logger("benchmark")
-        benchmark_logger.info(f"Starting GuideLLM benchmark for {benchmark_config.model}")
-        benchmark_logger.info(f"Running: {' '.join(cmd)}")
-        benchmark_logger.info(f"Results will be saved to: {results_file}")
-        
-        # Start process in its own process group
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True
-        )
-        
-        # Store process info in benchmark provider for cleanup
-        if self.benchmark_provider:
-            self.benchmark_provider._process = process
-            self.benchmark_provider._process_pid = process.pid
-            try:
-                self.benchmark_provider._process_pgid = os.getpgid(process.pid)
-                benchmark_logger.debug(f"Started GuideLLM process {process.pid} in process group {self.benchmark_provider._process_pgid}")
-            except (OSError, ProcessLookupError):
-                self.benchmark_provider._process_pgid = None
-        
-        return process
-    
-    def _parse_benchmark_results(self, benchmark_config):
-        """Parse benchmark results from the output file."""
-        results_file = self._benchmark_results_file
-        
-        if not os.path.exists(results_file):
-            raise RuntimeError(f"Benchmark results file not found: {results_file}")
-        
-        # Parse the JSON results file
-        import json
-        with open(results_file, "r") as f:
-            return json.load(f)
 
     def _log_python_environment(self, logger):
         """Log Python environment information for debugging."""
@@ -879,43 +795,6 @@ class BaseTrialController(TrialController):
             port = s.getsockname()[1]
 
         return port
-
-    def _wait_for_server_ready(self, url: str, timeout: int = 300):
-        """Wait for vLLM server to be ready."""
-        import requests
-
-        vllm_logger = self._get_trial_logger("vllm")
-        start_time = time.time()
-        health_url = url.replace("/v1", "/health")
-
-        vllm_logger.info(
-            f"Waiting for vLLM server to be ready at {health_url} (timeout: {timeout}s)"
-        )
-
-        while time.time() - start_time < timeout:
-            # Check if vLLM process has died during startup
-            if self.vllm_process and self.vllm_process.poll() is not None:
-                vllm_logger.error(
-                    f"vLLM process died during startup with exit code "
-                    f"{self.vllm_process.returncode}"
-                )
-                raise RuntimeError(
-                    f"vLLM process died during startup with exit code "
-                    f"{self.vllm_process.returncode}"
-                )
-            
-            try:
-                response = requests.get(health_url, timeout=5)
-                if response.status_code == 200:
-                    vllm_logger.info(f"vLLM server ready at {url}")
-                    return
-            except requests.exceptions.RequestException as e:
-                vllm_logger.debug(f"Health check failed: {e}")
-
-            time.sleep(2)
-
-        vllm_logger.error(f"vLLM server failed to start within {timeout} seconds")
-        raise RuntimeError(f"vLLM server failed to start within {timeout} seconds")
 
     def _start_health_monitoring(
         self, health_url: str, check_interval: float = 1.0, max_failures: int = 3

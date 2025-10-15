@@ -40,25 +40,6 @@ class BenchmarkProvider(ABC):
             'trial_id': trial_id
         }
     
-    def set_cancellation_flag(self, flag_callable):
-        """Set a callable that returns True when cancellation is requested.
-        
-        Args:
-            flag_callable: A callable (e.g., lambda or function) that returns 
-                          True when the benchmark should be cancelled.
-        """
-        self._cancellation_flag = flag_callable
-    
-    def _should_cancel(self):
-        """Check if cancellation has been requested.
-        
-        Returns:
-            bool: True if cancellation was requested, False otherwise.
-        """
-        if self._cancellation_flag and callable(self._cancellation_flag):
-            return self._cancellation_flag()
-        return False
-    
     def terminate_benchmark(self):
         """Terminate the running benchmark process and its process group if active."""
         # Try to use stored PID/PGID first, in case process handle is gone
@@ -138,13 +119,23 @@ class BenchmarkProvider(ABC):
             self._process_pgid = None
 
     @abstractmethod
-    def run_benchmark(self, model_url: str, config: BenchmarkConfig) -> Dict[str, Any]:
+    def start_benchmark(self, model_url: str, config: BenchmarkConfig) -> subprocess.Popen:
         """
-        Run benchmark against model server.
+        Start benchmark subprocess (non-blocking).
 
         Args:
             model_url: URL of the vLLM server (e.g., "http://localhost:8000/v1")
             config: Benchmark configuration
+
+        Returns:
+            Popen process handle for polling by caller
+        """
+        pass
+
+    @abstractmethod
+    def parse_results(self) -> Dict[str, Any]:
+        """
+        Parse benchmark results from output file.
 
         Returns:
             Dictionary with benchmark results. Must include metrics that can be
@@ -173,154 +164,80 @@ class GuideLLMBenchmark(BenchmarkProvider):
         "request_concurrency": "successful",
     }
 
-    def run_benchmark(self, model_url: str, config: BenchmarkConfig) -> Dict[str, Any]:
-        """Run GuideLLM benchmark."""
+    def start_benchmark(self, model_url: str, config: BenchmarkConfig) -> subprocess.Popen:
+        """
+        Start GuideLLM benchmark subprocess (non-blocking).
+        
+        Returns:
+            Popen process handle for polling by caller
+        """
         self._logger.info(f"Starting GuideLLM benchmark for {config.model}")
 
         # Create results file path directly in permanent location
-        results_file = self._get_results_file_path()
+        self._results_file = self._get_results_file_path()
 
-        try:
-            # Build GuideLLM command
-            cmd = self._build_guidellm_command(model_url, config, results_file)
-            # Validate binary and basic inputs
-            import shutil
-
-            if shutil.which("guidellm") is None:
-                raise RuntimeError(
-                    "GuideLLM CLI not found on PATH. "
-                    "Please install or provide the full path."
-                )
-            if not (
-                model_url.startswith("http://") or model_url.startswith("https://")
-            ):
-                raise ValueError(
-                    f"Invalid model_url: {model_url!r} (expected http/https)"
-                )
-
-            # Run GuideLLM
-            self._logger.info(f"Running: {' '.join(cmd)}")
-            self._logger.info(f"Results will be saved to: {results_file}")
-            
-            # Use Popen so we can terminate if vLLM dies
-            # start_new_session=True puts it in its own process group for clean termination
-            self._process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                start_new_session=True
-            )
-            
-            # Store PID and PGID immediately for cleanup, even if process handle is lost
-            self._process_pid = self._process.pid
-            try:
-                self._process_pgid = os.getpgid(self._process_pid)
-                self._logger.debug(f"Started GuideLLM process {self._process_pid} in process group {self._process_pgid}")
-            except (OSError, ProcessLookupError):
-                self._logger.warning(f"Failed to get process group for GuideLLM process {self._process_pid}")
-                self._process_pgid = None
-
-            stdout, stderr, returncode = None, None, None
-            
-            try:
-                # Poll for completion with cancellation checks
-                timeout_seconds = config.max_seconds * 1.5
-                start_time = time.time()
-                poll_interval = 0.5  # Check every 500ms
-                
-                self._logger.debug(f"Polling benchmark process (timeout: {timeout_seconds}s, check interval: {poll_interval}s)")
-                
-                poll_count = 0
-                while True:
-                    poll_count += 1
-                    
-                    # Log every 10 iterations (every 5 seconds) to track progress
-                    if poll_count % 10 == 0:
-                        elapsed = time.time() - start_time
-                        self._logger.debug(f"Polling iteration {poll_count}, elapsed: {elapsed:.1f}s")
-                    
-                    # Check if process has completed
-                    returncode = self._process.poll()
-                    if returncode is not None:
-                        # Process finished
-                        self._logger.debug(f"Benchmark process completed with return code {returncode}")
-                        break
-                    
-                    # Check for cancellation
-                    cancel_flag = self._should_cancel()
-                    if poll_count % 5 == 0:
-                        # Log every 5 iterations
-                        self._logger.debug(f"Cancellation check #{poll_count}: {cancel_flag}")
-                    
-                    if cancel_flag:
-                        self._logger.warning("Benchmark cancellation detected in polling loop! Terminating process...")
-                        self.terminate_benchmark()
-                        # Wait a moment for termination to complete
-                        time.sleep(0.5)
-                        # Get any output before raising exception
-                        try:
-                            stdout, stderr = self._process.communicate(timeout=2)
-                        except:
-                            stdout, stderr = None, None
-                        raise KeyboardInterrupt("Benchmark cancelled by user request")
-                    
-                    # Check for timeout
-                    elapsed = time.time() - start_time
-                    if elapsed > timeout_seconds:
-                        self._logger.warning(f"GuideLLM timed out after {elapsed:.1f}s, terminating process")
-                        self.terminate_benchmark()
-                        raise RuntimeError(
-                            f"GuideLLM benchmark timed out after {timeout_seconds} seconds"
-                        )
-                    
-                    # Sleep before next check
-                    time.sleep(poll_interval)
-                
-                # Process completed normally, get output
-                self._logger.debug("Collecting process output...")
-                stdout, stderr = self._process.communicate(timeout=5)
-                returncode = self._process.returncode
-                
-            except KeyboardInterrupt:
-                # Re-raise cancellation to be handled by caller
-                self._logger.info("Benchmark cancelled, propagating interrupt")
-                raise
-            except subprocess.TimeoutExpired as e:
-                self._logger.error("Failed to collect process output after completion")
-                raise RuntimeError(f"Failed to collect benchmark output") from e
-            finally:
-                # Clear process tracking
-                self._process = None
-                self._process_pid = None
-                self._process_pgid = None
-            
-            if stdout is not None:
-                self._logger.info(f"GuideLLM stdout:\n{stdout}")
-            if stderr is not None:
-                self._logger.warning(f"GuideLLM stderr:\n{stderr}")
-            if returncode is not None and returncode != 0:
-                raise subprocess.CalledProcessError(
-                    returncode, cmd, stdout, stderr
-                )
-
-            self._logger.debug(
-                f"GuideLLM process completed with return code: "
-                f"{returncode}"
-            )
-            self._logger.info("GuideLLM completed successfully")
+        # Build GuideLLM command
+        cmd = self._build_guidellm_command(model_url, config, self._results_file)
         
-        except Exception as e:
-            self._logger.error(f"Error during GuideLLM benchmark: {e}")
-            raise e
+        # Validate binary and basic inputs
+        import shutil
 
+        if shutil.which("guidellm") is None:
+            raise RuntimeError(
+                "GuideLLM CLI not found on PATH. "
+                "Please install or provide the full path."
+            )
+        if not (
+            model_url.startswith("http://") or model_url.startswith("https://")
+        ):
+            raise ValueError(
+                f"Invalid model_url: {model_url!r} (expected http/https)"
+            )
+
+        # Run GuideLLM
+        self._logger.info(f"Running: {' '.join(cmd)}")
+        self._logger.info(f"Results will be saved to: {self._results_file}")
+        
+        # Use Popen so we can terminate if vLLM dies
+        # start_new_session=True puts it in its own process group for clean termination
+        self._process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True
+        )
+        
+        # Store PID and PGID immediately for cleanup, even if process handle is lost
+        self._process_pid = self._process.pid
+        try:
+            self._process_pgid = os.getpgid(self._process_pid)
+            self._logger.debug(f"Started GuideLLM process {self._process_pid} in process group {self._process_pgid}")
+        except (OSError, ProcessLookupError):
+            self._logger.warning(f"Failed to get process group for GuideLLM process {self._process_pid}")
+            self._process_pgid = None
+        
+        return self._process
+
+    def parse_results(self) -> Dict[str, Any]:
+        """
+        Parse GuideLLM benchmark results from output file.
+        
+        Returns:
+            Dictionary with benchmark metrics
+        """
+        results_file = self._results_file
+        
         if not os.path.exists(results_file):
-            if not os.path.exists(results_file):
-                raise RuntimeError(
-                    f"GuideLLM results file not found after completion: {results_file}"
-                )
-        # Parse results
-        return self._parse_guidellm_results(results_file)
+            raise RuntimeError(f"GuideLLM results file not found: {results_file}")
+        
+        try:
+            with open(results_file) as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"Invalid JSON in results file: {e}")
+
+        return self._parse_guidellm_results(data)
 
     def _get_results_file_path(self) -> str:
         """
@@ -426,17 +343,8 @@ class GuideLLMBenchmark(BenchmarkProvider):
                 cmd.extend(["--data-type", "file", "--dataset", config.dataset])
         return cmd
 
-    def _parse_guidellm_results(self, results_file: str) -> Dict[str, Any]:
-        """Parse GuideLLM JSON results."""
-        if not os.path.exists(results_file):
-            raise RuntimeError(f"GuideLLM results file not found: {results_file}")
-
-        try:
-            with open(results_file) as f:
-                data = json.load(f)
-        except json.JSONDecodeError as e:
-            raise RuntimeError(f"Invalid JSON in results file: {e}")
-
+    def _parse_guidellm_results(self, data: dict) -> Dict[str, Any]:
+        """Parse GuideLLM JSON results data structure."""
         # Extract benchmark data structure
         try:
             benchmarks = data["benchmarks"]
@@ -516,30 +424,46 @@ class GuideLLMBenchmark(BenchmarkProvider):
 class CustomBenchmarkTemplate(BenchmarkProvider):
     """Template for implementing custom benchmark providers."""
 
-    def run_benchmark(self, model_url: str, config: BenchmarkConfig) -> Dict[str, Any]:
+    def start_benchmark(self, model_url: str, config: BenchmarkConfig) -> subprocess.Popen:
         """
-        Template implementation for custom benchmarks.
+        Template implementation for starting custom benchmarks.
 
-        Override this method to implement your custom benchmark logic.
+        Override this method to start your custom benchmark subprocess.
+        Should return a Popen process handle for the caller to poll.
+        
+        Example:
+            cmd = ["your-benchmark-tool", "--url", model_url, ...]
+            self._process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True
+            )
+            self._process_pid = self._process.pid
+            self._process_pgid = os.getpgid(self._process.pid)
+            return self._process
+        """
+        raise NotImplementedError("CustomBenchmarkTemplate is a template only")
+
+    def parse_results(self) -> Dict[str, Any]:
+        """
+        Template implementation for parsing benchmark results.
+
+        Override this method to parse your benchmark output file.
         The returned dictionary should contain metrics that will be used
         to compute objective values for Optuna optimization.
+        
+        Example:
+            with open(self._results_file) as f:
+                data = json.load(f)
+            return {
+                "throughput": data["throughput"],
+                "latency_p95": data["p95_latency"],
+                ...
+            }
         """
-        # Example custom benchmark implementation:
-
-        # 1. Setup your benchmark client/tools
-        # benchmark_client = YourBenchmarkTool(model_url)
-
-        # 2. Run your benchmark logic
-        # benchmark_results = benchmark_client.run_test(
-        #     duration=config.max_seconds,
-        #     concurrency=config.concurrency,
-        #     # ... other config parameters
-        # )
-
-        # 3. Return structured results
-        # The keys should be metric names, values should be numeric
-        # Optuna will use these for optimization objectives
-
+        # Return template structure showing expected metrics
         return {
             "throughput": 0.0,  # requests/second or tokens/second
             "latency_p95": 0.0,  # 95th percentile latency in ms
@@ -551,21 +475,9 @@ class CustomBenchmarkTemplate(BenchmarkProvider):
         }
 
 
-# Registry for dynamic benchmark provider loading
+# Registry for dynamic benchmark provider loading (for reference/documentation)
 BENCHMARK_PROVIDERS = {
     "guidellm": GuideLLMBenchmark,
     "custom_template": CustomBenchmarkTemplate,
 }
-
-
-def get_benchmark_provider(provider_name: str) -> BenchmarkProvider:
-    """Get benchmark provider by name."""
-    if provider_name not in BENCHMARK_PROVIDERS:
-        raise ValueError(
-            f"Unknown benchmark provider: {provider_name}. "
-            f"Available providers: {list(BENCHMARK_PROVIDERS.keys())}"
-        )
-
-    provider_class = BENCHMARK_PROVIDERS[provider_name]
-    return provider_class()
 
