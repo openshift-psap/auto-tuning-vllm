@@ -635,6 +635,7 @@ class StudyController:
         optimization_completed_count = 0
 
         for result in completed_results:
+            logger.debug(f"Completed result: {result}")
             trial_id = result.trial_id
 
             # Remove from active trials

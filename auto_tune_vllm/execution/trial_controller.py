@@ -387,6 +387,7 @@ class BaseTrialController(TrialController):
                     )
                     if result:  # vLLM is ready, transition to benchmark
                         benchmark_process, benchmark_start_time = result
+                        execution_info.mark_benchmark_started()
                         state = TrialState.RUNNING_BENCHMARK
                         controller_logger.debug(f"State transition: {TrialState.WAITING_FOR_VLLM.name} → {TrialState.RUNNING_BENCHMARK.name}")
                         continue  # Skip sleep, start benchmark immediately
@@ -397,7 +398,13 @@ class BaseTrialController(TrialController):
                         execution_info, controller_logger
                     )
                     if result:  # Benchmark completed successfully
+                        controller_logger.debug(f"Benchmark handler returned result: success={result.success}, objectives={result.objective_values}")
+                        execution_info.mark_benchmark_completed()
+                        execution_info.mark_completed(status="success")
+                        controller_logger.info(f"Returning successful trial result with {len(result.objective_values)} objectives")
                         return result
+                    # If None, benchmark still running - continue polling
+                    controller_logger.debug(f"Benchmark still running... (elapsed: {time.time() - benchmark_start_time:.1f}s)")
                 
                 # Sleep before next poll
                 time.sleep(poll_interval)
@@ -445,6 +452,9 @@ class BaseTrialController(TrialController):
                 if "vLLM" in error_str or "health" in error_str
                 else "benchmark_crash"
             )
+            # Mark benchmark as completed if we were running it
+            if state == TrialState.RUNNING_BENCHMARK:
+                execution_info.mark_benchmark_completed()
             execution_info.mark_completed(status=status)
             controller_logger.error(f"Trial {trial_config.trial_id} failed: {e}")
 
@@ -749,7 +759,6 @@ class BaseTrialController(TrialController):
                 benchmark_result, trial_config.optimization_config
             )
             logger.info(f"Trial completed with objectives: {objective_values}")
-            execution_info.mark_completed()
             
             return TrialResult(
                 trial_id=trial_config.trial_id,
