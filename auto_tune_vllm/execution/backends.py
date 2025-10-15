@@ -12,11 +12,30 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import ray
 
 from ..core.trial import TrialConfig, TrialResult
 
 logger = logging.getLogger(__name__)
 
+
+# Simple Ray actor to hold cancellation state that can be modified externally
+
+@ray.remote
+class CancellationFlag:
+    """Lightweight Ray actor to hold mutable cancellation state."""
+
+    def __init__(self):
+        self.cancelled = False
+
+    def request_cancellation(self):
+        """Set cancellation flag to True."""
+        self.cancelled = True
+        return True
+
+    def is_cancelled(self):
+        """Check if cancellation was requested."""
+        return self.cancelled
 
 @dataclass
 class JobHandle:
@@ -76,6 +95,7 @@ class RayExecutionBackend(ExecutionBackend):
         }
         self.active_jobs: Dict[str, object] = {}  # job_id -> ray_ref
         self.active_actors: Dict[str, object] = {}  # job_id -> ray_actor
+        self.cancellation_flags: Dict[str, object] = {}  # job_id -> ray.put(flag_dict)
         self.start_ray_head = start_ray_head
         self._started_ray_head = False  # Track if we started Ray head for cleanup
 
@@ -218,7 +238,12 @@ class RayExecutionBackend(ExecutionBackend):
 
     def submit_trial(self, trial_config: TrialConfig) -> JobHandle:
         """Submit trial to Ray cluster."""
+        import ray
         from .trial_controller import RayTrialActor
+
+        # Create a lightweight cancellation flag actor (separate from trial actor)
+        # This can be called even while the trial actor is busy
+        cancellation_flag_actor = CancellationFlag.remote()
 
         # Create Ray actor with resource requirements from trial config
         # Extract num_gpus and num_cpus from trial's resource_requirements
@@ -248,13 +273,14 @@ class RayExecutionBackend(ExecutionBackend):
 
         controller = RayTrialActor.options(**controller_options).remote()
 
-        # Submit trial execution
-        future_ref = controller.run_trial.remote(trial_config)
+        # Submit trial execution with cancellation flag actor
+        future_ref = controller.run_trial.remote(trial_config, cancellation_flag_actor)
         job_id = str(future_ref)  # Use Ray ObjectRef as job ID
 
-        # Track active job and actor
+        # Track active job, actor, and cancellation flag actor
         self.active_jobs[job_id] = future_ref
         self.active_actors[job_id] = controller
+        self.cancellation_flags[job_id] = cancellation_flag_actor
 
         logger.info(f"Submitted trial {trial_config.trial_id} to Ray cluster")
         return JobHandle(trial_config.trial_id, job_id)
@@ -342,29 +368,30 @@ class RayExecutionBackend(ExecutionBackend):
             f"╚════════════════════════════════════════════════════════════╝"
         )
 
-        # Two-phase cancellation approach:
-        # Phase 1: Terminate benchmark processes (unblocks tasks)
-        # Phase 2: Cancel Ray tasks (raises cancellation exception)
-        
-        logger.info("Backend: Phase 1 - Terminating benchmark processes...")
+        # Phase 1: Set cancellation flags (triggers benchmark termination in polling loops)
+        logger.info("Backend: Phase 1 - Setting cancellation flags...")
         cancellation_futures = []
-        for job_id, actor in self.active_actors.items():
+        for job_id, flag_actor in self.cancellation_flags.items():
             try:
-                # This terminates the benchmark subprocess, unblocking run_trial()
-                cancel_ref = actor.request_cancellation.remote()
+                # Set the cancellation flag - this is a separate lightweight actor
+                # so it can process this call even while the trial actor is busy
+                cancel_ref = flag_actor.request_cancellation.remote()
                 cancellation_futures.append((job_id, cancel_ref))
-                logger.info(f"Backend → Trial Controller: Sent cancellation request for trial {job_id}")
+                logger.info(f"Backend → Cancellation Flag: Set flag for trial {job_id}")
             except Exception as e:
-                logger.warning(f"Backend: Failed to request cancellation for trial {job_id}: {e}")
+                logger.warning(f"Backend: Failed to set cancellation flag for trial {job_id}: {e}")
         
-        # Wait briefly for benchmark processes to terminate
+        # Wait briefly for flags to be set and polling loops to detect them
         if cancellation_futures:
             try:
                 refs_only = [ref for _, ref in cancellation_futures]
-                ray.wait(refs_only, num_returns=len(refs_only), timeout=5)
-                logger.info(f"Backend: Benchmark termination processed for {len(cancellation_futures)} trial(s)")
+                ray.wait(refs_only, num_returns=len(refs_only), timeout=2)
+                logger.info(f"Backend: Cancellation flags set for {len(cancellation_futures)} trial(s)")
+                # Give polling loops time to detect and terminate benchmarks
+                logger.info("Backend: Waiting for polling loops to detect cancellation (5s)...")
+                time.sleep(5)
             except Exception as e:
-                logger.warning(f"Backend: Error during benchmark termination wait: {e}")
+                logger.warning(f"Backend: Error setting cancellation flags: {e}")
         
         logger.info("Backend: Phase 2 - Cancelling Ray tasks...")
         cancelled_count = 0

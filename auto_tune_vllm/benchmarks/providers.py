@@ -8,6 +8,7 @@ import os
 import signal
 import subprocess
 import tempfile
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict
@@ -26,6 +27,8 @@ class BenchmarkProvider(ABC):
         self._process = None  # Track running benchmark process for termination
         self._process_pid = None  # Store PID for cleanup even if process handle is gone
         self._process_pgid = None  # Store process group ID for cleanup
+        self._cancellation_flag = None  # Function to check for cancellation
+    
     def set_logger(self, custom_logger):
         """Set a custom logger for this benchmark provider."""
         self._logger = custom_logger
@@ -36,6 +39,25 @@ class BenchmarkProvider(ABC):
             'study_name': study_name,
             'trial_id': trial_id
         }
+    
+    def set_cancellation_flag(self, flag_callable):
+        """Set a callable that returns True when cancellation is requested.
+        
+        Args:
+            flag_callable: A callable (e.g., lambda or function) that returns 
+                          True when the benchmark should be cancelled.
+        """
+        self._cancellation_flag = flag_callable
+    
+    def _should_cancel(self):
+        """Check if cancellation has been requested.
+        
+        Returns:
+            bool: True if cancellation was requested, False otherwise.
+        """
+        if self._cancellation_flag and callable(self._cancellation_flag):
+            return self._cancellation_flag()
+        return False
     
     def terminate_benchmark(self):
         """Terminate the running benchmark process and its process group if active."""
@@ -202,21 +224,73 @@ class GuideLLMBenchmark(BenchmarkProvider):
             stdout, stderr, returncode = None, None, None
             
             try:
-                # Wait for completion with timeout
-                stdout, stderr = self._process.communicate(
-                    timeout=config.max_seconds * 1.5
-                )
-                returncode = self._process.returncode
-            
-            except subprocess.TimeoutExpired as e:
-                self._logger.warning("GuideLLM timed out, terminating process")
-                self.terminate_benchmark()
+                # Poll for completion with cancellation checks
                 timeout_seconds = config.max_seconds * 1.5
-                raise RuntimeError(
-                    f"GuideLLM benchmark timed out after {timeout_seconds} seconds"
-                ) from e
+                start_time = time.time()
+                poll_interval = 0.5  # Check every 500ms
+                
+                self._logger.debug(f"Polling benchmark process (timeout: {timeout_seconds}s, check interval: {poll_interval}s)")
+                
+                poll_count = 0
+                while True:
+                    poll_count += 1
+                    
+                    # Log every 10 iterations (every 5 seconds) to track progress
+                    if poll_count % 10 == 0:
+                        elapsed = time.time() - start_time
+                        self._logger.debug(f"Polling iteration {poll_count}, elapsed: {elapsed:.1f}s")
+                    
+                    # Check if process has completed
+                    returncode = self._process.poll()
+                    if returncode is not None:
+                        # Process finished
+                        self._logger.debug(f"Benchmark process completed with return code {returncode}")
+                        break
+                    
+                    # Check for cancellation
+                    cancel_flag = self._should_cancel()
+                    if poll_count % 5 == 0:
+                        # Log every 5 iterations
+                        self._logger.debug(f"Cancellation check #{poll_count}: {cancel_flag}")
+                    
+                    if cancel_flag:
+                        self._logger.warning("Benchmark cancellation detected in polling loop! Terminating process...")
+                        self.terminate_benchmark()
+                        # Wait a moment for termination to complete
+                        time.sleep(0.5)
+                        # Get any output before raising exception
+                        try:
+                            stdout, stderr = self._process.communicate(timeout=2)
+                        except:
+                            stdout, stderr = None, None
+                        raise KeyboardInterrupt("Benchmark cancelled by user request")
+                    
+                    # Check for timeout
+                    elapsed = time.time() - start_time
+                    if elapsed > timeout_seconds:
+                        self._logger.warning(f"GuideLLM timed out after {elapsed:.1f}s, terminating process")
+                        self.terminate_benchmark()
+                        raise RuntimeError(
+                            f"GuideLLM benchmark timed out after {timeout_seconds} seconds"
+                        )
+                    
+                    # Sleep before next check
+                    time.sleep(poll_interval)
+                
+                # Process completed normally, get output
+                self._logger.debug("Collecting process output...")
+                stdout, stderr = self._process.communicate(timeout=5)
+                returncode = self._process.returncode
+                
+            except KeyboardInterrupt:
+                # Re-raise cancellation to be handled by caller
+                self._logger.info("Benchmark cancelled, propagating interrupt")
+                raise
+            except subprocess.TimeoutExpired as e:
+                self._logger.error("Failed to collect process output after completion")
+                raise RuntimeError(f"Failed to collect benchmark output") from e
             finally:
-                # Clear process tracking after communicate() completes
+                # Clear process tracking
                 self._process = None
                 self._process_pid = None
                 self._process_pgid = None
