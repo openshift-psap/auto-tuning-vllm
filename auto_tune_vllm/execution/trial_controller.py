@@ -348,6 +348,7 @@ class BaseTrialController(TrialController):
             
             # Start vLLM server
             controller_logger.info("Starting vLLM server")
+            execution_info.mark_vllm_started()
             server_info = self._start_vllm_server(trial_config)
             execution_info.worker_node_id = self._get_worker_id()
             
@@ -359,7 +360,15 @@ class BaseTrialController(TrialController):
             poll_interval = 0.5  # 500ms
             poll_count = 0
             
-            controller_logger.info(f"Waiting for server at {server_info['url']} to be ready (timeout: {trial_config.vllm_startup_timeout}s)")
+            # Wait for server to be ready
+            controller_logger.info(
+                f"Waiting for server at {server_info['url']} to be ready "
+                f"(timeout: {trial_config.vllm_startup_timeout}s)"
+            )
+            self._wait_for_server_ready(
+                server_info["url"], trial_config.vllm_startup_timeout
+            )
+            execution_info.mark_vllm_ready()
             
             # Main execution loop - concise with extracted state handlers
             while True:
@@ -392,7 +401,6 @@ class BaseTrialController(TrialController):
                 
                 # Sleep before next poll
                 time.sleep(poll_interval)
-
 
         except KeyboardInterrupt as e:
             execution_info.mark_completed()
@@ -430,8 +438,14 @@ class BaseTrialController(TrialController):
                     error_type="Cancelled",
                 )
             
-            # Handle other exceptions normally
-            execution_info.mark_completed()
+            # Handle other exceptions normally - determine failure type based on error message
+            error_str = str(e)
+            status = (
+                "vllm_crash"
+                if "vLLM" in error_str or "health" in error_str
+                else "benchmark_crash"
+            )
+            execution_info.mark_completed(status=status)
             controller_logger.error(f"Trial {trial_config.trial_id} failed: {e}")
 
             # Classify error for database storage
@@ -455,19 +469,19 @@ class BaseTrialController(TrialController):
 
     def _classify_error(self, exception: Exception) -> str:
         """Classify error type based on exception message.
-        
+
         Uses ERROR_PATTERNS dictionary to categorize exceptions for
         structured failure analysis in the database.
-        
+
         Returns:
             Error type string (e.g., "OOM", "Timeout") or "Unknown"
         """
         error_message = str(exception).lower()
-        
+
         for error_type, patterns in self.ERROR_PATTERNS.items():
             if any(pattern in error_message for pattern in patterns):
                 return error_type
-        
+
         return "Unknown"
 
     def _create_benchmark_provider(
@@ -835,18 +849,55 @@ class BaseTrialController(TrialController):
 
         return port
 
+    def _wait_for_server_ready(self, url: str, timeout: int = 300):
+        """Wait for vLLM server to be ready."""
+        import requests
+
+        vllm_logger = self._get_trial_logger("vllm")
+        start_time = time.time()
+        health_url = url.replace("/v1", "/health")
+
+        vllm_logger.info(
+            f"Waiting for vLLM server to be ready at {health_url} (timeout: {timeout}s)"
+        )
+
+        while time.time() - start_time < timeout:
+            # Check if vLLM process has died during startup
+            if self.vllm_process and self.vllm_process.poll() is not None:
+                vllm_logger.error(
+                    f"vLLM process died during startup with exit code "
+                    f"{self.vllm_process.returncode}"
+                )
+                raise RuntimeError(
+                    f"vLLM process died during startup with exit code "
+                    f"{self.vllm_process.returncode}"
+                )
+
+            try:
+                response = requests.get(health_url, timeout=5)
+                if response.status_code == 200:
+                    vllm_logger.info(f"vLLM server ready at {url}")
+                    return
+            except requests.exceptions.RequestException as e:
+                vllm_logger.debug(f"Health check failed: {e}")
+
+            time.sleep(2)
+
+        vllm_logger.error(f"vLLM server failed to start within {timeout} seconds")
+        raise RuntimeError(f"vLLM server failed to start within {timeout} seconds")
+
     def _start_health_monitoring(
         self, health_url: str, check_interval: float = 1.0, max_failures: int = 3
     ):
         """
         Start background health monitoring of vLLM server.
-        
+
         Args:
             health_url: URL to check for health status
-            check_interval: Seconds between health checks (default: 10)
-            max_failures: Number of consecutive failures before marking 
+            check_interval: Seconds between health checks (default: 30)
+            max_failures: Number of consecutive failures before marking
                 as dead (default: 3)
-        
+
         Environment Variables:
             VLLM_HEALTH_CHECK_DEBUG: Set to '1' or 'true' to enable verbose logging
         """
@@ -856,9 +907,11 @@ class BaseTrialController(TrialController):
 
         # TODO: Remove debug logging after verifying health monitoring works
         # Set VLLM_HEALTH_CHECK_DEBUG=1 to enable verbose logging
-        debug = os.environ.get(
-            "VLLM_HEALTH_CHECK_DEBUG", ""
-        ).lower() in ("1", "true", "yes")
+        debug = os.environ.get("VLLM_HEALTH_CHECK_DEBUG", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
 
         self._health_check_url = health_url
         self._health_monitor_stop = False
@@ -907,10 +960,12 @@ class BaseTrialController(TrialController):
                     # Terminate running benchmark immediately
                     self.benchmark_provider.terminate_benchmark()
                     break
-                
+
                 try:
                     response = requests.get(health_url, timeout=5)
                     if response.status_code == 200:
+                        # TODO: Remove debug logging after verifying health
+                        # monitoring works
                         if debug:
                             vllm_logger.info(
                                 f"[DEBUG] Health check PASSED: "
@@ -932,6 +987,8 @@ class BaseTrialController(TrialController):
                         )
                 except requests.exceptions.RequestException as e:
                     consecutive_failures += 1
+                    # TODO: Remove debug logging after verifying health
+                    # monitoring works
                     log_msg = (
                         f"Health check failed: {e} "
                         f"(failure {consecutive_failures}/{max_failures})"
@@ -943,6 +1000,8 @@ class BaseTrialController(TrialController):
                     vllm_logger.warning(log_msg)
                 except Exception as e:
                     consecutive_failures += 1
+                    # TODO: Remove debug logging after verifying health
+                    # monitoring works
                     log_msg = (
                         f"Unexpected health check error: {e} "
                         f"(failure {consecutive_failures}/{max_failures})"
@@ -954,10 +1013,7 @@ class BaseTrialController(TrialController):
                     vllm_logger.warning(log_msg)
 
                 # Check if we've exceeded max failures
-                if (
-                    max_failures > 0
-                    and consecutive_failures >= max_failures
-                ):
+                if max_failures > 0 and consecutive_failures >= max_failures:
                     self._health_check_failed = True
                     self._health_check_failure_reason = (
                         f"vLLM server failed {consecutive_failures} consecutive "

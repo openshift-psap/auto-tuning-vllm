@@ -582,6 +582,20 @@ class StudyController:
                 logger.error(f"Failed to get next trial from Optuna: {e}")
                 break
 
+            # Check if these exact parameters have already been tried and failed
+            if self._is_duplicate_failed_trial(trial.params):
+                logger.warning(
+                    f"Trial {trial.number} has duplicate parameters from a previous "
+                    f"failed trial. Skipping: {trial.params}"
+                )
+                # Mark as failed immediately without running
+                self.study.tell(
+                    trial=trial.number,
+                    values=None,
+                    state=optuna.trial.TrialState.FAIL,
+                )
+                continue  # Ask for another trial
+
             # Cache trial object for setting user attributes later
             self.trial_objects[trial.number] = trial
 
@@ -674,6 +688,39 @@ class StudyController:
 
         return optimization_completed_count
 
+    def _is_duplicate_failed_trial(self, params: Dict) -> bool:
+        """
+        Check if the given parameters match any previously failed trial.
+
+        This prevents the sampler from suggesting the exact same parameter
+        combination that has already failed, which can happen despite using
+        RetryFailedTrialCallback. The callback only prevents retry of the
+        exact same trial object, but samplers can still suggest identical
+        parameter combinations as "new" trials.
+
+        Args:
+            params: Parameter dictionary from trial.params
+
+        Returns:
+            True if these parameters match a failed trial, False otherwise
+        """
+        # Get failed trials (with caching for better performance)
+        failed_trials = [
+            t for t in self.study.trials if t.state == optuna.trial.TrialState.FAIL
+        ]
+
+        for past_trial in failed_trials:
+            # Compare parameter dictionaries
+            # Both dicts should have the same keys and values
+            if past_trial.params == params:
+                logger.debug(
+                    f"Found duplicate parameters in failed trial "
+                    f"{past_trial.number}: {params}"
+                )
+                return True
+
+        return False
+
     def _build_trial_config(self, trial: optuna.Trial) -> TrialConfig:
         """Build trial configuration from Optuna trial."""
         # Start with static parameters that apply to all trials
@@ -699,36 +746,86 @@ class StudyController:
         )
 
     def _set_trial_user_attributes(self, trial_number: int, result: TrialResult):
-        """Store error information as trial user attributes in Optuna database.
+        """
+        Store timing and error information as trial user attributes in Optuna database.
 
-        Stores error_type and error_message in trial_user_attributes table
-        for post-study failure analysis.
+        Stores timing metrics, error_type, and error_message in trial_user_attributes
+        table for post-study analysis.
 
         Why we cache trial objects:
         - trial objects from study.ask() allow calling set_user_attr() before tell()
         - self.study.trials[trial_number] doesn't exist until AFTER tell() is called
         - Uses public API (trial.set_user_attr) to avoid Optuna internal dependencies
         """
-        if result.success:
-            return  # Only store attributes for failed trials
+        trial = self.trial_objects.get(trial_number, None)
+        if trial is None:
+            logger.warning(
+                f"Trial {trial_number} not in cache, cannot store user attributes"
+            )
+            return
 
-        try:
-            if trial_number not in self.trial_objects:
-                logger.warning(
-                    f"Trial {trial_number} not in cache, cannot store error attributes"
+        # Store timing information for ALL trials (success and failure)
+        if result.execution_info:
+            exec_info = result.execution_info
+            from datetime import datetime
+
+            # Set timestamp attributes (ISO format for better readability)
+            if exec_info.start_time:
+                trial.set_user_attr(
+                    "trial_start_time",
+                    datetime.fromtimestamp(exec_info.start_time).isoformat(),
                 )
-                return
 
-            trial = self.trial_objects[trial_number]
-            trial.set_user_attr("error_type", result.error_type)
-            trial.set_user_attr("error_message", result.error_message)
+            if exec_info.end_time:
+                trial.set_user_attr(
+                    "trial_end_time",
+                    datetime.fromtimestamp(exec_info.end_time).isoformat(),
+                )
+
+            # Set duration attributes (in seconds)
+            if exec_info.vllm_startup_duration is not None:
+                trial.set_user_attr(
+                    "vllm_startup_duration_seconds",
+                    round(exec_info.vllm_startup_duration, 2),
+                )
+
+            if exec_info.benchmark_duration is not None:
+                trial.set_user_attr(
+                    "benchmark_duration_seconds",
+                    round(exec_info.benchmark_duration, 2),
+                )
+
+            if exec_info.duration_seconds is not None:
+                trial.set_user_attr(
+                    "total_duration_seconds",
+                    round(exec_info.duration_seconds, 2),
+                )
+
+            # Set status attributes
+            if exec_info.trial_status:
+                trial.set_user_attr("trial_status", exec_info.trial_status)
+
+            if exec_info.worker_node_id:
+                trial.set_user_attr("worker_node_id", exec_info.worker_node_id)
+
+        # Store error information for failed trials
+        if not result.success:
+            if result.error_type:
+                trial.set_user_attr("error_type", result.error_type)
+            if result.error_message:
+                trial.set_user_attr("error_message", result.error_message)
             logger.info(
                 f"Stored error attributes for trial {trial_number}: {result.error_type}"
             )
-        except Exception as e:
-            logger.error(
-                f"Failed to store user attributes for trial {trial_number}: {e}",
-                exc_info=True,
+
+        # Log timing attributes stored
+        if result.execution_info:
+            logger.debug(
+                f"Stored timing attributes for trial {trial_number}: "
+                f"vllm_startup={result.execution_info.vllm_startup_duration}s, "
+                f"benchmark={result.execution_info.benchmark_duration}s, "
+                f"total={result.execution_info.duration_seconds}s, "
+                f"status={result.execution_info.trial_status}"
             )
 
     def get_best_baseline_result(self) -> Optional[List[float]]:
