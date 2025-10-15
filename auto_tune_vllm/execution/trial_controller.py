@@ -59,6 +59,7 @@ class BaseTrialController(TrialController):
         self.trial_loggers = {}  # Dict to hold trial-specific loggers
         self._health_monitor_thread = None
         self._health_monitor_stop = False
+        self._health_monitor_stop_event = None
         self._health_check_url = None
         self._health_check_failed = False
         self._health_check_failure_reason = None
@@ -625,14 +626,14 @@ class BaseTrialController(TrialController):
         raise RuntimeError(f"vLLM server failed to start within {timeout} seconds")
 
     def _start_health_monitoring(
-        self, health_url: str, check_interval: int = 30, max_failures: int = 3
+        self, health_url: str, check_interval: float = 1.0, max_failures: int = 3
     ):
         """
         Start background health monitoring of vLLM server.
         
         Args:
             health_url: URL to check for health status
-            check_interval: Seconds between health checks (default: 30)
+            check_interval: Seconds between health checks (default: 10)
             max_failures: Number of consecutive failures before marking 
                 as dead (default: 3)
         
@@ -658,15 +659,29 @@ class BaseTrialController(TrialController):
 
         def monitor_health():
             consecutive_failures = 0
-            check_count = 0  # TODO: Remove after verifying health monitoring works
+            # Normalize polling period to a positive float and default to 1.0s
+            try:
+                period = float(check_interval)
+            except Exception:
+                period = 1.0
+            if period <= 0:
+                period = 1.0
             vllm_logger.info(
                 f"Starting health monitoring: checking {health_url} every "
-                f"{check_interval}s"
+                f"{period}s"
                 + (" (DEBUG MODE: verbose logging enabled)" if debug else "")
             )
+            
+            # Event used to interrupt waits for responsive shutdown
+            import threading as _threading
+            if self._health_monitor_stop_event is None:
+                self._health_monitor_stop_event = _threading.Event()
+            stop_event = self._health_monitor_stop_event
+            
+            # Schedule first run immediately, then maintain fixed cadence
+            next_deadline = time.monotonic() + period
 
-            while not self._health_monitor_stop:
-                check_count += 1  # TODO: Remove after verifying health monitoring works
+            while not self._health_monitor_stop and not stop_event.is_set():
                 
                 # Check if vLLM process itself has died
                 if self.vllm_process and self.vllm_process.poll() is not None:
@@ -686,11 +701,9 @@ class BaseTrialController(TrialController):
                 try:
                     response = requests.get(health_url, timeout=5)
                     if response.status_code == 200:
-                        # TODO: Remove debug logging after verifying health 
-                        # monitoring works
                         if debug:
                             vllm_logger.info(
-                                f"[DEBUG] Health check #{check_count} PASSED: "
+                                f"[DEBUG] Health check PASSED: "
                                 f"status={response.status_code}, "
                                 f"consecutive_failures={consecutive_failures}"
                             )
@@ -709,28 +722,24 @@ class BaseTrialController(TrialController):
                         )
                 except requests.exceptions.RequestException as e:
                     consecutive_failures += 1
-                    # TODO: Remove debug logging after verifying health 
-                    # monitoring works
                     log_msg = (
                         f"Health check failed: {e} "
                         f"(failure {consecutive_failures}/{max_failures})"
                     )
                     if debug:
                         log_msg = (
-                            f"[DEBUG] Health check #{check_count} FAILED: {log_msg}"
+                            f"[DEBUG] Health check FAILED: {log_msg}"
                         )
                     vllm_logger.warning(log_msg)
                 except Exception as e:
                     consecutive_failures += 1
-                    # TODO: Remove debug logging after verifying health 
-                    # monitoring works
                     log_msg = (
                         f"Unexpected health check error: {e} "
                         f"(failure {consecutive_failures}/{max_failures})"
                     )
                     if debug:
                         log_msg = (
-                            f"[DEBUG] Health check #{check_count} ERROR: {log_msg}"
+                            f"[DEBUG] Health check ERROR: {log_msg}"
                         )
                     vllm_logger.warning(log_msg)
 
@@ -752,8 +761,14 @@ class BaseTrialController(TrialController):
                     self._terminate_benchmark()
                     break
 
-                # Wait before next check (but check stop flag periodically)
-                time.sleep(check_interval)
+                # Maintain fixed-cadence scheduling based on monotonic time
+                now = time.monotonic()
+                # Catch up if the last cycle overran the period
+                while next_deadline <= now:
+                    next_deadline += period
+                sleep_duration = max(0.0, next_deadline - now)
+                if stop_event.wait(timeout=sleep_duration):
+                    break
 
             vllm_logger.info("Health monitoring stopped")
 
@@ -769,10 +784,15 @@ class BaseTrialController(TrialController):
             vllm_logger = self._get_trial_logger("vllm")
             vllm_logger.info("Stopping health monitoring thread")
             self._health_monitor_stop = True
-            # Give the thread a moment to stop gracefully
-            self._health_monitor_thread.join(timeout=5)
+            try:
+                if self._health_monitor_stop_event is not None:
+                    self._health_monitor_stop_event.set()
+            except Exception:
+                pass
+            # Wait briefly for the thread to exit cooperatively
+            self._health_monitor_thread.join(timeout=10)
             if self._health_monitor_thread.is_alive():
-                vllm_logger.warning("Health monitoring thread did not stop gracefully")
+                vllm_logger.warning("Health monitoring thread did not stop within timeout; continuing cleanup")
 
     def _terminate_benchmark(self):
         """Terminate the running benchmark process if vLLM has failed."""
@@ -842,72 +862,61 @@ class BaseTrialController(TrialController):
             try:
                 pgid = os.getpgid(pid)
             except (OSError, ProcessLookupError):
+                logger.warning(f"Failed to get process group id for {pid}")
                 pgid = None
 
+            # Attempt graceful shutdown with SIGTERM first
+            logger.info(
+                f"Sending SIGTERM to vLLM process {pid} for graceful cleanup at time: {time.time()}"
+            )
             try:
-                # Send SIGINT first for graceful cleanup (what vLLM expects)
-                logger.info(
-                    f"Sending SIGINT to vLLM process {pid} for graceful cleanup "
-                    f"at time: {time.time()}"
-                )
-                if pgid is not None:
-                    # Signal the entire process group so children exit too
-                    os.killpg(pgid, signal.SIGINT)
-                else:
-                    self.vllm_process.send_signal(signal.SIGINT)
-                self.vllm_process.wait(
-                    timeout=120
-                )  # Give more time for graceful cleanup
-                logger.info(f"Gracefully terminated vLLM process {pid}")
-            except subprocess.TimeoutExpired:
-
-                # If graceful shutdown fails, then use SIGTERM
-                logger.warning(f"Graceful shutdown timed out, sending SIGTERM to {pid}")
                 if pgid is not None:
                     os.killpg(pgid, signal.SIGTERM)
+                    # TODO: Cleanup logging levels after verifying health monitoring works
+                    logger.warning(f"Sent SIGTERM to process group {pgid} at time: {time.time()}")
                 else:
+                    logger.warning(f"No process group id found for {pid}, sending SIGTERM directly")
                     self.vllm_process.terminate()
-                try:
-                    self.vllm_process.wait(timeout=5)
-                    logger.info(
-                        f"Terminated vLLM process {pid} with SIGTERM at time: "
-                        f"{time.time()}"
-                    )
-                except subprocess.TimeoutExpired:
-                    # Last resort: kill entire process group to catch multiprocessing
-                    # children
-                    logger.warning(
-                        f"SIGTERM timeout, killing process group for {pid} at time: "
-                        f"{time.time()}"
-                    )
-                    try:
-                        # Kill the entire process group (negative PID)
-                    try:
-                        # Kill the entire process group (negative PID)
-                        if pgid is not None:
-                            os.killpg(pgid, signal.SIGKILL)
-                        else:
-                            # pgid unavailable, kill process directly
-                            self.vllm_process.kill()
-                            logger.info(f"Force killed vLLM process {pid}")
-                    except (OSError, ProcessLookupError) as e:
-                        logger.warning(f"Failed to kill process group for {pid}: {e}")
-                        # Fallback to regular kill if killpg fails
-                        try:
-                            self.vllm_process.kill()
-                            logger.warning(f"Force killed vLLM process {pid}")
-                        except (OSError, ProcessLookupError):
-                            logger.warning(f"Process {pid} already dead")
-                    except (OSError, ProcessLookupError) as e:
-                        logger.warning(f"Failed to kill process group for {pid}: {e}")
-                        # Fallback to regular kill if killpg fails
-                        try:
-                            self.vllm_process.kill()
-                            logger.warning(f"Force killed vLLM process {pid}")
-                        except (OSError, ProcessLookupError):
-                            logger.warning(f"Process {pid} already dead")
+                    # TODO: Cleanup logging levels after verifying health monitoring works
+                    logger.warning(f"Sent SIGTERM to process {pid} at time: {time.time()}")
+            except (OSError, ProcessLookupError):
+                # Process already gone
+                self.vllm_process = None
+                # TODO: Cleanup logging levels after verifying health monitoring works
+                logger.warning(f"vLLM process {pid} already exited at time: {time.time()}")
+                return
+            try:
+                self.vllm_process.wait(timeout=10)
+                # TODO: Cleanup logging levels after verifying health monitoring works
+                logger.warning(f"Gracefully terminated vLLM process {pid} at time: {time.time()}")
+                self.vllm_process = None
+                # TODO: Cleanup logging levels after verifying health monitoring works
+                logger.warning(f"vLLM process {pid} terminated gracefully at time: {time.time()}")
+                return
+            except subprocess.TimeoutExpired:
+                logger.warning( # TODO: Cleanup logging levels after verifying health monitoring works
+                    f"SIGTERM timeout, escalating to SIGKILL for {pid} at time: {time.time()}"
+                )
+
+            # Final fallback: SIGKILL
+            try:
+                if pgid is not None:
+                    os.killpg(pgid, signal.SIGKILL)
+                    # TODO: Cleanup logging levels after verifying health monitoring works
+                    logger.warning(f"Sent SIGKILL to process group {pgid} at time: {time.time()}")
+                else:
+                    self.vllm_process.kill()
+                    # TODO: Cleanup logging levels after verifying health monitoring works
+                    logger.warning(f"Sent SIGKILL to process {pid} at time: {time.time()}")
+                # TODO: Cleanup logging levels after verifying health monitoring works
+                logger.warning(f"Force killed vLLM process {pid} at time: {time.time()}")
+            except (OSError, ProcessLookupError) as e:
+                logger.warning(f"Failed to kill process {pid}: {e}")
+                logger.warning(f"Failed to force kill vLLM process {pid} at time: {time.time()}")
             finally:
                 self.vllm_process = None
+                # TODO: Cleanup logging levels after verifying health monitoring works
+                logger.warning(f"vLLM process {pid} force killed at time: {time.time()}")
 
     @abstractmethod
     def _get_worker_id(self) -> str:

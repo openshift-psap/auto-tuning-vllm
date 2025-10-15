@@ -230,6 +230,8 @@ class GuideLLMBenchmark(BenchmarkProvider):
             str(config.rate),
             "--output-path",
             results_file,
+            "--processor-args",
+            '{"trust-remote-code":"true"}'
         ]
 
         # Add dataset or synthetic data configuration
