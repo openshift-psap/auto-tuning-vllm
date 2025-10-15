@@ -27,7 +27,7 @@ dependencies = [
     "optuna>=3.0.0",
     "optuna-integration[botorch]>=4.0.0",
     "ray[default]>=2.0.0",
-    "vllm>=0.2.0",
+    "vllm>=0.11.0",
     "guidellm>=0.1.0",
     "pyyaml>=6.0",
     "pydantic>=2.0.0",
@@ -44,7 +44,7 @@ postgresql = [
 dev = [
     "pytest>=7.0.0",
     "ruff>=0.1.0",
-    "mypy>=1.0.0",
+    "basedpyright>=1.1.0",
     "pre-commit>=3.0.0",
 ]
 viz = [
@@ -53,10 +53,9 @@ viz = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/your-org/auto-tune-vllm"
-Documentation = "https://auto-tune-vllm.readthedocs.io"
-Repository = "https://github.com/your-org/auto-tune-vllm"
-Issues = "https://github.com/your-org/auto-tune-vllm/issues"
+Homepage = "https://github.com/openshift-psap/auto-tuning-vllm"
+Repository = "https://github.com/openshift-psap/auto-tuning-vllm"
+Issues = "https://github.com/openshift-psap/auto-tuning-vllm/issues"
 
 [project.scripts]
 auto-tune-vllm = "auto_tune_vllm.cli:main"
@@ -77,8 +76,8 @@ ignore = []
 quote-style = "double"
 indent-style = "space"
 
-[tool.mypy]
-python_version = "3.10"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = true
+[tool.basedpyright]
+pythonVersion = "3.10"
+typeCheckingMode = "recommended"
+reportUnusedVariable = true
+reportUnusedImport = true
