@@ -260,7 +260,7 @@ class BaselineConfig:
                 if not isinstance(concurrency, int) or concurrency <= 0:
                     raise ValueError(
                         f"Invalid concurrency level: {concurrency}. "
-                        f"Must be positive integer"
+                        + "Must be positive integer"
                     )
 
 
@@ -330,9 +330,7 @@ class ConfigValidator:
             if resolved_version and resolved_version.startswith("0.10.0"):
                 schema_path = Path(__file__).parent.parent / "schemas" / "v0_10_0.yaml"
             else:
-                schema_path = (
-                    Path(__file__).parent.parent / "schemas" / "v0_10_2.yaml"
-                )
+                schema_path = Path(__file__).parent.parent / "schemas" / "v0_11_0.yaml"
         # Store resolved version for defaults handling
         self.vllm_version = vllm_version or locals().get("resolved_version")
 
@@ -341,7 +339,6 @@ class ConfigValidator:
 
         # Load defaults - support versioned defaults
         self.defaults = {}
-        
 
         if defaults_path is not None:
             self.defaults_path = Path(defaults_path)
