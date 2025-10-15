@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+import ray
 import typer
 from rich.console import Console
 from rich.logging import RichHandler
@@ -1226,7 +1227,6 @@ def check_environment_command(
 def _check_ray_cluster_environment():
     """Check environment on all Ray cluster nodes."""
     try:
-        import ray
 
         if not ray.is_initialized():
             console.print("[yellow]Initializing Ray connection...[/yellow]")
@@ -1247,9 +1247,6 @@ def _check_ray_cluster_environment():
 
             controller = LocalTrialController()
             controller._validate_environment()
-
-            # Return node info
-            import ray
 
             node_id = ray.get_runtime_context().get_node_id()
             return f"Worker node {node_id[:8]}"

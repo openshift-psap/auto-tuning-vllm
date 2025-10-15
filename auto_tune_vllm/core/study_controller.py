@@ -536,17 +536,11 @@ class StudyController:
 
         except KeyboardInterrupt:
             logger.warning(
-                "╔═══════════════════════════════════════════════════════════╗"
-            )
-            logger.warning(
-                "║  INTERRUPT SIGNAL RECEIVED - Initiating graceful shutdown ║"
-            )
-            logger.warning(
-                "╚═══════════════════════════════════════════════════════════╝"
+                "!!! INTERRUPT SIGNAL RECEIVED - Initiating graceful shutdown !!!"
             )
             logger.info(
                 f"Study interrupted with {len(self.active_trials)} active trial(s). "
-                f"Completed {self.completed_trials}/{total_trials} trials before interrupt."
+                f"Completed {self.completed_trials}/{total_trials} trials before interrupt. "
             )
             if self.active_trials:
                 logger.info(
