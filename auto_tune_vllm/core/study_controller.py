@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import time
-from pathlib import Path
 from typing import Dict, List, Optional
 
 import optuna
@@ -20,8 +19,12 @@ from optuna.samplers import (
 from ..execution.backends import ExecutionBackend, JobHandle
 from ..logging.manager import CentralizedLogger
 from .config import StudyConfig
-from .db_utils import create_database_if_not_exists, verify_database_connection
 from .parameters import EnvironmentParameter, ListParameter, RangeParameter
+from .storage.postgres_utils import (
+    create_database_if_not_exists,
+    verify_database_connection,
+)
+from .storage.utils import StorageType, get_storage
 from .trial import TrialConfig, TrialResult
 
 logger = logging.getLogger(__name__)
@@ -89,26 +92,10 @@ class StudyController:
         # Determine optimization directions for Optuna
         # (works for single and multi-objective)
         directions = config.optimization.optuna_directions
-
-        # Determine storage backend for Optuna study
-        if config.database_url:
-            storage = config.database_url
-            storage_type = "PostgreSQL"
-        elif config.storage_file:
-            # Ensure directory exists for file-based storage
-            storage_path = Path(config.storage_file)
-            storage_path.parent.mkdir(parents=True, exist_ok=True)
-            storage = f"sqlite:///{config.storage_file}"
-            storage_type = "SQLite file"
-        else:
-            # This should not happen due to validation in config.py,
-            # but fallback to in-memory
-            storage = None
-            storage_type = "in-memory"
-
-        logger.info(f"Using {storage_type} storage for Optuna study")
-        if storage:
-            logger.info(f"Storage location: {storage}")
+        storage, storage_type = get_storage(config)
+        logger.info("Using %s storage for Optuna study", storage_type.name)
+        if storage_type is StorageType.SQLITE:
+            logger.info("Storage path: %s", config.storage_file)
 
         # Create Optuna study with appropriate load_if_exists behavior
         load_if_exists = (
@@ -247,30 +234,11 @@ class StudyController:
         # Create sampler based on config
         sampler = cls._create_sampler(config)
 
-        # Determine storage backend for Optuna study
-        if config.database_url:
-            storage = config.database_url
-            storage_type = "PostgreSQL"
-        elif config.storage_file:
-            # Ensure directory exists for file-based storage
-            storage_path = Path(config.storage_file)
-            if not storage_path.exists():
-                raise RuntimeError(
-                    f"Study '{config.study_name}' not found in storage. "
-                    f"Storage file does not exist: {config.storage_file}. "
-                    f"Options:\n"
-                    f"  • Use 'auto-tune-vllm optimize --config <config_file>' "
-                    f"to create a new study\n"
-                    f"  • Verify the study name and storage path are correct"
-                )
-            storage = f"sqlite:///{config.storage_file}"
-            storage_type = "SQLite file"
-        else:
-            # This should not happen due to validation in config.py
-            raise RuntimeError("No storage configuration found. Cannot resume study.")
+        storage, storage_type = get_storage(config, resume_study=True)
 
-        logger.info(f"Using {storage_type} storage for resuming Optuna study")
-        logger.info(f"Storage location: {storage}")
+        logger.info("Using %s storage for resuming Optuna study", storage_type.name)
+        if storage_type is StorageType.SQLITE:
+            logger.info("Storage path: %s", config.storage_file)
 
         # Try to load existing study - this will fail if the study doesn't exist
         logger.info(f"Attempting to resume existing study: {config.study_name}")
@@ -290,15 +258,14 @@ class StudyController:
                     f"  • Verify the study name is correct\n"
                     f"  • Check that the storage location contains the study"
                 )
-            elif config.database_url and (
+            if config.database_url and (
                 "database" in str(e).lower() or "connection" in str(e).lower()
             ):
                 raise RuntimeError(
                     f"Failed to connect to database for resuming study: {e}. "
                     f"Please check your database connection."
                 )
-            else:
-                raise RuntimeError(f"Failed to resume study '{config.study_name}': {e}")
+            raise RuntimeError(f"Failed to resume study '{config.study_name}': {e}")
 
         # Log study information
         logger.info(f"Successfully resumed study: {config.study_name}")
@@ -641,7 +608,6 @@ class StudyController:
                     result.trial_type == "optimization"
                     and result.trial_number is not None
                 ):
-                    
                     self._set_trial_user_attributes(result.trial_number, result)
 
                     if result.success and result.objective_values:
@@ -663,7 +629,6 @@ class StudyController:
                         )
                         logger.error(f"Trial {trial_id} failed: {result.error_message}")
 
-                   
                     if result.trial_number in self.trial_objects:
                         del self.trial_objects[result.trial_number]
 
@@ -710,10 +675,10 @@ class StudyController:
 
     def _set_trial_user_attributes(self, trial_number: int, result: TrialResult):
         """Store error information as trial user attributes in Optuna database.
-        
+
         Stores error_type and error_message in trial_user_attributes table
         for post-study failure analysis.
-        
+
         Why we cache trial objects:
         - trial objects from study.ask() allow calling set_user_attr() before tell()
         - self.study.trials[trial_number] doesn't exist until AFTER tell() is called
