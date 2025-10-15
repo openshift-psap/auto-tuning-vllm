@@ -42,14 +42,21 @@ class BenchmarkProvider(ABC):
     def terminate_benchmark(self):
         """Terminate the running benchmark process and its process group if active."""
         # Try to use stored PID/PGID first, in case process handle is gone
-        pid = self._process_pid if self._process_pid else (self._process.pid if self._process else None)
+        pid = (
+            self._process_pid
+            if self._process_pid
+            else (self._process.pid if self._process else None)
+        )
         pgid = self._process_pgid
         
         if pid is None:
             self._logger.debug("Benchmark: No benchmark process to terminate")
             return
             
-        self._logger.info(f"Benchmark: Terminating benchmark process {pid} and its process group...")
+        self._logger.info(
+            f"Benchmark: Terminating benchmark process {pid} "
+            f"and its process group..."
+        )
         
         # Try to get process group ID if we don't have it
         if pgid is None:
@@ -57,13 +64,17 @@ class BenchmarkProvider(ABC):
                 pgid = os.getpgid(pid)
                 self._logger.debug(f"Benchmark: Retrieved process group ID: {pgid}")
             except (OSError, ProcessLookupError):
-                self._logger.debug(f"Benchmark: Process {pid} already gone or no process group")
+                self._logger.debug(
+                    f"Benchmark: Process {pid} already gone or no process group"
+                )
         
         # Try graceful shutdown with SIGTERM first
         try:
             if pgid is not None:
                 os.killpg(pgid, signal.SIGTERM)
-                self._logger.info(f"Benchmark → Process Group: Sent SIGTERM to group {pgid}")
+                self._logger.info(
+                    f"Benchmark → Process Group: Sent SIGTERM to group {pgid}"
+                )
             else:
                 os.kill(pid, signal.SIGTERM)
                 self._logger.info(f"Benchmark → Process: Sent SIGTERM to process {pid}")
@@ -75,7 +86,8 @@ class BenchmarkProvider(ABC):
             self._process_pgid = None
             return
         
-        # Wait for graceful shutdown (use a shorter timeout if process handle unavailable)
+        # Wait for graceful shutdown
+        # (use a shorter timeout if process handle unavailable)
         wait_timeout = 5 if self._process else 2
         try:
             if self._process:
@@ -94,7 +106,9 @@ class BenchmarkProvider(ABC):
                     # Timeout - process still exists
                     raise subprocess.TimeoutExpired(None, wait_timeout)
                     
-            self._logger.info(f"Benchmark: ✓ Process {pid} terminated gracefully via SIGTERM")
+            self._logger.info(
+                f"Benchmark: ✓ Process {pid} terminated gracefully via SIGTERM"
+            )
         except subprocess.TimeoutExpired:
             self._logger.warning(
                 f"Benchmark: Process {pid} did not terminate within {wait_timeout}s. "
@@ -105,20 +119,30 @@ class BenchmarkProvider(ABC):
             try:
                 if pgid is not None:
                     os.killpg(pgid, signal.SIGKILL)
-                    self._logger.info(f"Benchmark → Process Group: Sent SIGKILL to group {pgid}")
+                    self._logger.info(
+                        f"Benchmark → Process Group: Sent SIGKILL to group {pgid}"
+                    )
                 else:
                     os.kill(pid, signal.SIGKILL)
-                    self._logger.info(f"Benchmark → Process: Sent SIGKILL to process {pid}")
-                self._logger.info(f"Benchmark: ✓ Process {pid} force killed via SIGKILL")
+                    self._logger.info(
+                        f"Benchmark → Process: Sent SIGKILL to process {pid}"
+                    )
+                self._logger.info(
+                    f"Benchmark: ✓ Process {pid} force killed via SIGKILL"
+                )
             except (OSError, ProcessLookupError) as e:
-                self._logger.debug(f"Benchmark: Process {pid} already gone during SIGKILL: {e}")
+                self._logger.debug(
+                    f"Benchmark: Process {pid} already gone during SIGKILL: {e}"
+                )
         finally:
             self._process = None
             self._process_pid = None
             self._process_pgid = None
 
     @abstractmethod
-    def start_benchmark(self, model_url: str, config: BenchmarkConfig) -> subprocess.Popen:
+    def start_benchmark(
+        self, model_url: str, config: BenchmarkConfig
+    ) -> subprocess.Popen:
         """
         Start benchmark subprocess (non-blocking).
 
@@ -163,7 +187,9 @@ class GuideLLMBenchmark(BenchmarkProvider):
         "request_concurrency": "successful",
     }
 
-    def start_benchmark(self, model_url: str, config: BenchmarkConfig) -> subprocess.Popen:
+    def start_benchmark(
+        self, model_url: str, config: BenchmarkConfig
+    ) -> subprocess.Popen:
         """
         Start GuideLLM benchmark subprocess (non-blocking).
         
@@ -211,9 +237,15 @@ class GuideLLMBenchmark(BenchmarkProvider):
         self._process_pid = self._process.pid
         try:
             self._process_pgid = os.getpgid(self._process_pid)
-            self._logger.debug(f"Started GuideLLM process {self._process_pid} in process group {self._process_pgid}")
+            self._logger.debug(
+                f"Started GuideLLM process {self._process_pid} "
+                f"in process group {self._process_pgid}"
+            )
         except (OSError, ProcessLookupError):
-            self._logger.warning(f"Failed to get process group for GuideLLM process {self._process_pid}")
+            self._logger.warning(
+                f"Failed to get process group for GuideLLM process "
+                f"{self._process_pid}"
+            )
             self._process_pgid = None
         
         return self._process
@@ -423,7 +455,9 @@ class GuideLLMBenchmark(BenchmarkProvider):
 class CustomBenchmarkTemplate(BenchmarkProvider):
     """Template for implementing custom benchmark providers."""
 
-    def start_benchmark(self, model_url: str, config: BenchmarkConfig) -> subprocess.Popen:
+    def start_benchmark(
+        self, model_url: str, config: BenchmarkConfig
+    ) -> subprocess.Popen:
         """
         Template implementation for starting custom benchmarks.
 

@@ -539,8 +539,10 @@ class StudyController:
                 "!!! INTERRUPT SIGNAL RECEIVED - Initiating graceful shutdown !!!"
             )
             logger.info(
-                f"Study interrupted with {len(self.active_trials)} active trial(s). "
-                f"Completed {self.completed_trials}/{total_trials} trials before interrupt. "
+                f"Study interrupted with {len(self.active_trials)} "
+                f"active trial(s). "
+                f"Completed {self.completed_trials}/{total_trials} trials "
+                f"before interrupt. "
             )
             if self.active_trials:
                 logger.info(
@@ -555,10 +557,12 @@ class StudyController:
             try:
                 if self.active_trials:
                     logger.info(
-                        f"Initiating cleanup of {len(self.active_trials)} active trial(s)..."
+                        f"Initiating cleanup of {len(self.active_trials)} "
+                        f"active trial(s)..."
                     )
                     logger.info(
-                        "Communicating cleanup request to trial controllers via backend..."
+                        "Communicating cleanup request to trial controllers "
+                        "via backend..."
                     )
                 else:
                     logger.info("No active trials to cleanup.")

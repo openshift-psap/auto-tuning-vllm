@@ -397,8 +397,14 @@ def run_optimization_sync(
         except KeyboardInterrupt:
             # User interrupted with Ctrl+C
             progress.update(task, description="⚠️  Optimization interrupted by user")
-            logger.warning("Keyboard interrupt received (Ctrl+C). Initiating graceful shutdown...")
-            console.print("\n[yellow]⚠️  Interrupt signal received. Cleaning up active trials...[/yellow]")
+            logger.warning(
+                "Keyboard interrupt received (Ctrl+C). "
+                "Initiating graceful shutdown..."
+            )
+            console.print(
+                "\n[yellow]⚠️  Interrupt signal received. "
+                "Cleaning up active trials...[/yellow]"
+            )
             raise
         except Exception:
             # Mark task as failed and re-raise

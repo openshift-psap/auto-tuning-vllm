@@ -348,7 +348,9 @@ class RayExecutionBackend(ExecutionBackend):
 
         return completed_results, remaining_handles
 
-    def _execute_remote_calls(self, items: dict, method_name: str, description: str) -> list:
+    def _execute_remote_calls(
+        self, items: dict, method_name: str, description: str
+    ) -> list:
         """Execute remote method calls on multiple actors/refs with error handling.
         
         Args:
@@ -390,7 +392,10 @@ class RayExecutionBackend(ExecutionBackend):
             if ready_refs:
                 logger.info(f"✓ {len(ready_refs)} {description} completed")
             if remaining_refs:
-                logger.warning(f"⚠ {len(remaining_refs)} {description} timed out after {timeout}s")
+                logger.warning(
+                    f"⚠ {len(remaining_refs)} {description} timed out "
+                    f"after {timeout}s"
+                )
             
             return len(ready_refs), len(remaining_refs)
         except Exception as e:
@@ -417,11 +422,16 @@ class RayExecutionBackend(ExecutionBackend):
         cancel_futures = self._execute_remote_calls(
             self.cancellation_flags, "request_cancellation", "Set cancellation flag"
         )
-        self._wait_for_refs(cancel_futures, self.CANCELLATION_FLAG_TIMEOUT, "cancellation flags")
+        self._wait_for_refs(
+            cancel_futures, self.CANCELLATION_FLAG_TIMEOUT, "cancellation flags"
+        )
         
         # Give polling loops time to detect and terminate benchmarks
         if cancel_futures:
-            logger.info(f"Waiting {self.CANCELLATION_DETECTION_WAIT}s for polling loops to detect cancellation...")
+            logger.info(
+                f"Waiting {self.CANCELLATION_DETECTION_WAIT}s for polling loops "
+                f"to detect cancellation..."
+            )
             time.sleep(self.CANCELLATION_DETECTION_WAIT)
         
         # Phase 2: Cancel Ray tasks
@@ -435,7 +445,10 @@ class RayExecutionBackend(ExecutionBackend):
                 logger.warning(f"Failed to cancel task {job_id}: {e}")
         
         if cancelled:
-            logger.info(f"Cancelled {cancelled} Ray task(s), waiting {self.TASK_CANCELLATION_WAIT}s...")
+            logger.info(
+                f"Cancelled {cancelled} Ray task(s), waiting "
+                f"{self.TASK_CANCELLATION_WAIT}s..."
+            )
             time.sleep(self.TASK_CANCELLATION_WAIT)
         
         # Phase 3: Call cleanup_resources on actors
@@ -443,12 +456,20 @@ class RayExecutionBackend(ExecutionBackend):
         cleanup_futures = self._execute_remote_calls(
             self.active_actors, "cleanup_resources", "Sent cleanup request"
         )
-        logger.info(f"Waiting up to {self.GRACEFUL_CLEANUP_TIMEOUT}s for graceful cleanup...")
-        self._wait_for_refs(cleanup_futures, self.GRACEFUL_CLEANUP_TIMEOUT, "actor cleanups")
+        logger.info(
+            f"Waiting up to {self.GRACEFUL_CLEANUP_TIMEOUT}s "
+            f"for graceful cleanup..."
+        )
+        self._wait_for_refs(
+            cleanup_futures, self.GRACEFUL_CLEANUP_TIMEOUT, "actor cleanups"
+        )
         
         # Phase 4: Force kill unresponsive actors
         if self.active_actors:
-            logger.warning(f"Force killing {len(self.active_actors)} unresponsive actor(s)...")
+            logger.warning(
+                f"Force killing {len(self.active_actors)} "
+                f"unresponsive actor(s)..."
+            )
             for job_id, actor in list(self.active_actors.items()):
                 try:
                     ray.kill(actor)
