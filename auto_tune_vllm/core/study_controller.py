@@ -24,7 +24,7 @@ from .storage.postgres_utils import (
     create_database_if_not_exists,
     verify_database_connection,
 )
-from .storage.utils import get_storage
+from .storage.utils import StorageType, get_storage
 from .trial import TrialConfig, TrialResult
 
 logger = logging.getLogger(__name__)
@@ -93,9 +93,9 @@ class StudyController:
         # (works for single and multi-objective)
         directions = config.optimization.optuna_directions
         storage, storage_type = get_storage(config)
-        logger.info(f"Using {storage_type.name} storage for Optuna study")
-        if storage:
-            logger.info(f"Storage location: {storage}")
+        logger.info("Using %s storage for Optuna study", storage_type.name)
+        if storage_type is StorageType.SQLITE:
+            logger.info("Storage path: %s", config.storage_file)
 
         # Create Optuna study with appropriate load_if_exists behavior
         load_if_exists = (
@@ -236,8 +236,9 @@ class StudyController:
 
         storage, storage_type = get_storage(config, resume_study=True)
 
-        logger.info(f"Using {storage_type.name} storage for resuming Optuna study")
-        logger.info(f"Storage location: {storage}")
+        logger.info("Using %s storage for resuming Optuna study", storage_type.name)
+        if storage_type is StorageType.SQLITE:
+            logger.info("Storage path: %s", config.storage_file)
 
         # Try to load existing study - this will fail if the study doesn't exist
         logger.info(f"Attempting to resume existing study: {config.study_name}")
