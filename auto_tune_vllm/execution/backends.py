@@ -329,26 +329,77 @@ class RayExecutionBackend(ExecutionBackend):
         import ray
 
         if not self.active_actors:
-            logger.info("No active trials to cleanup")
+            logger.debug("No active trials to cleanup")
             return
 
-        logger.info(f"Cleaning up {len(self.active_actors)} active trials...")
+        logger.info(
+            f"╔════════════════════════════════════════════════════════════╗"
+        )
+        logger.info(
+            f"║  Backend: Cleaning up {len(self.active_actors)} active trial(s) ║"
+        )
+        logger.info(
+            f"╚════════════════════════════════════════════════════════════╝"
+        )
 
-        # Call cleanup_resources on all active actors with timeout
+        # Two-phase cancellation approach:
+        # Phase 1: Terminate benchmark processes (unblocks tasks)
+        # Phase 2: Cancel Ray tasks (raises cancellation exception)
+        
+        logger.info("Backend: Phase 1 - Terminating benchmark processes...")
+        cancellation_futures = []
+        for job_id, actor in self.active_actors.items():
+            try:
+                # This terminates the benchmark subprocess, unblocking run_trial()
+                cancel_ref = actor.request_cancellation.remote()
+                cancellation_futures.append((job_id, cancel_ref))
+                logger.info(f"Backend → Trial Controller: Sent cancellation request for trial {job_id}")
+            except Exception as e:
+                logger.warning(f"Backend: Failed to request cancellation for trial {job_id}: {e}")
+        
+        # Wait briefly for benchmark processes to terminate
+        if cancellation_futures:
+            try:
+                refs_only = [ref for _, ref in cancellation_futures]
+                ray.wait(refs_only, num_returns=len(refs_only), timeout=5)
+                logger.info(f"Backend: Benchmark termination processed for {len(cancellation_futures)} trial(s)")
+            except Exception as e:
+                logger.warning(f"Backend: Error during benchmark termination wait: {e}")
+        
+        logger.info("Backend: Phase 2 - Cancelling Ray tasks...")
+        cancelled_count = 0
+        for job_id, task_ref in self.active_jobs.items():
+            try:
+                logger.info(f"Backend: Cancelling task for trial {job_id}...")
+                ray.cancel(task_ref, force=False)
+                cancelled_count += 1
+            except Exception as e:
+                logger.warning(f"Backend: Failed to cancel task for trial {job_id}: {e}")
+        
+        if cancelled_count > 0:
+            logger.info(f"Backend: Cancelled {cancelled_count} Ray task(s)")
+            # Give tasks a moment to process cancellation
+            time.sleep(2)
+        
+        # Now call cleanup_resources on all active actors with timeout
         cleanup_futures = []
         for job_id, actor in self.active_actors.items():
             try:
                 # Call cleanup asynchronously with timeout
                 cleanup_ref = actor.cleanup_resources.remote()
                 cleanup_futures.append((job_id, cleanup_ref))
-                logger.info(f"Initiated cleanup for trial {job_id}")
+                logger.info(f"Backend → Trial Controller: Sent cleanup request for trial {job_id}")
             except Exception as e:
-                logger.warning(f"Failed to initiate cleanup for trial {job_id}: {e}")
+                logger.warning(f"Backend: Failed to initiate cleanup for trial {job_id}: {e}")
 
         # Wait for cleanup with timeout
-        timeout = 30  # 30 seconds timeout
+        # Increased timeout to allow for graceful SIGTERM, then SIGKILL
+        # vLLM: 10s SIGTERM wait + GuideLLM: 5s SIGTERM wait + buffer
+        # Set to a few minutes to ensure cleanup completes before force-killing actors
+        timeout = 180  # 3 minutes timeout for graceful cleanup
         if cleanup_futures:
             try:
+                logger.info(f"Backend: Waiting for trial controllers to complete cleanup (timeout: {timeout}s)...")
                 refs_only = [ref for _, ref in cleanup_futures]
                 ready_refs, remaining_refs = ray.wait(
                     refs_only, num_returns=len(refs_only), timeout=timeout
@@ -356,25 +407,36 @@ class RayExecutionBackend(ExecutionBackend):
 
                 # Log results
                 if ready_refs:
-                    logger.info(f"Successfully cleaned up {len(ready_refs)} trials")
+                    logger.info(
+                        f"Backend: ✓ {len(ready_refs)} trial controller(s) completed cleanup gracefully"
+                    )
                 if remaining_refs:
-                    logger.warning(f"Cleanup timeout for {len(remaining_refs)} trials")
+                    logger.warning(
+                        f"Backend: ⚠ Cleanup timeout for {len(remaining_refs)} trial(s) after {timeout}s. "
+                        f"Proceeding with force kill of Ray actors..."
+                    )
 
             except Exception as e:
-                logger.error(f"Error during cleanup wait: {e}")
+                logger.error(f"Backend: Error during cleanup wait: {e}")
 
         # Force kill actors that didn't cleanup properly
-        for job_id, actor in list(self.active_actors.items()):
-            try:
-                ray.kill(actor)
-                logger.info(f"Force killed actor for trial {job_id}")
-            except Exception as e:
-                logger.warning(f"Failed to kill actor for trial {job_id}: {e}")
+        actors_to_kill = list(self.active_actors.items())
+        if actors_to_kill:
+            logger.warning(
+                f"Backend: Force killing {len(actors_to_kill)} Ray actor(s) "
+                f"that did not complete cleanup..."
+            )
+            for job_id, actor in actors_to_kill:
+                try:
+                    ray.kill(actor)
+                    logger.info(f"Backend: Force killed Ray actor for trial {job_id}")
+                except Exception as e:
+                    logger.warning(f"Backend: Failed to kill Ray actor for trial {job_id}: {e}")
 
         # Clear tracking
         self.active_actors.clear()
         self.active_jobs.clear()
-        logger.info("Completed cleanup of all active trials")
+        logger.info("Backend: Completed cleanup of all active trials.")
 
     def shutdown(self):
         """Shutdown Ray cluster connection."""

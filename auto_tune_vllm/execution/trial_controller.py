@@ -32,6 +32,11 @@ class TrialController(ABC):
         """Clean up any resources (servers, processes, etc.)."""
         pass
 
+    @abstractmethod
+    def request_cancellation(self):
+        """Request cancellation of the running trial (non-blocking)."""
+        pass
+
 
 class BaseTrialController(TrialController):
     """Base implementation with common trial execution logic."""
@@ -64,6 +69,7 @@ class BaseTrialController(TrialController):
         self._health_check_failed = False
         self._health_check_failure_reason = None
         self._benchmark_process = None  # Track running benchmark process
+        self._cancellation_requested = False  # Flag for external cancellation requests
 
     def _validate_environment(self, trial_config: Optional[TrialConfig] = None) -> None:
         """Validate that all required packages are available on this worker."""
@@ -214,6 +220,18 @@ class BaseTrialController(TrialController):
         """
         return self.trial_loggers.get(component, logger)
 
+    def _flush_logger_handlers(self, target_logger):
+        """
+        Immediately flush all handlers for a specific logger.
+        This ensures logs appear in real-time during critical operations like cleanup.
+        """
+        for handler in target_logger.handlers:
+            try:
+                handler.flush()
+            except Exception as e:
+                # Silently ignore flush errors to avoid breaking cleanup
+                logger.debug(f"Failed to flush handler: {e}")
+
     def _flush_trial_logs(self, trial_id: str):
         """Flush any buffered logs for the trial to ensure all records are written."""
         try:
@@ -242,6 +260,31 @@ class BaseTrialController(TrialController):
                             )
         except Exception as e:
             logger.debug(f"Error flushing trial logs: {e}")
+
+    def request_cancellation(self):
+        """Request cancellation of the running trial (non-blocking).
+        
+        This method can be called via Ray .remote() while run_trial is executing.
+        It sets a flag that causes the trial to terminate gracefully.
+        """
+        controller_logger = self._get_trial_logger("controller")
+        controller_logger.info("╔═══════════════════════════════════════════════════════════╗")
+        controller_logger.info("║  CANCELLATION REQUESTED - Terminating trial immediately   ║")
+        controller_logger.info("╚═══════════════════════════════════════════════════════════╝")
+        self._flush_logger_handlers(controller_logger)
+        
+        self._cancellation_requested = True
+        
+        # Immediately terminate benchmark if running
+        if self.benchmark_provider:
+            controller_logger.info("Cancellation: Terminating benchmark process...")
+            self._flush_logger_handlers(controller_logger)
+            try:
+                self.benchmark_provider.terminate_benchmark()
+                controller_logger.info("Cancellation: Benchmark terminated")
+            except Exception as e:
+                controller_logger.warning(f"Cancellation: Error terminating benchmark: {e}")
+            self._flush_logger_handlers(controller_logger)
 
     def run_trial(self, trial_config: TrialConfig) -> TrialResult:
         """Execute trial with proper error handling and cleanup."""
@@ -284,6 +327,10 @@ class BaseTrialController(TrialController):
                 server_info["url"], trial_config.vllm_startup_timeout
             )
 
+            # Check for cancellation before starting benchmark
+            if self._cancellation_requested:
+                raise KeyboardInterrupt("Trial cancelled before benchmark started")
+
             # Start health monitoring after server is ready
             health_url = server_info["url"].replace("/v1", "/health")
             controller_logger.info("Starting runtime health monitoring")
@@ -310,6 +357,10 @@ class BaseTrialController(TrialController):
             benchmark_result = self.benchmark_provider.run_benchmark(
                 model_url=server_info["url"], config=trial_config.benchmark_config
             )
+            
+            # Check if trial was cancelled during benchmark
+            if self._cancellation_requested:
+                raise KeyboardInterrupt("Trial cancelled during benchmark execution")
 
             # Check if vLLM server died during benchmark execution
             self._check_health_status()
@@ -334,7 +385,45 @@ class BaseTrialController(TrialController):
                 success=True,
             )
 
+        except KeyboardInterrupt as e:
+            execution_info.mark_completed()
+            error_logger = self._get_trial_logger("controller")
+            error_logger.warning(f"Trial {trial_config.trial_id} cancelled: {e}")
+
+            return TrialResult(
+                trial_id=trial_config.trial_id,
+                trial_number=trial_config.trial_number,
+                trial_type=trial_config.trial_type,
+                objective_values=[],
+                detailed_metrics={},
+                execution_info=execution_info,
+                success=False,
+                error_message=f"Trial cancelled: {e}",
+                error_type="Cancelled",
+            )
         except Exception as e:
+            # Check if this is a Ray cancellation exception
+            exception_name = type(e).__name__
+            if "Cancel" in exception_name or "cancel" in str(e).lower():
+                execution_info.mark_completed()
+                error_logger = self._get_trial_logger("controller")
+                error_logger.warning(
+                    f"Trial {trial_config.trial_id} cancelled by Ray: {e}"
+                )
+
+                return TrialResult(
+                    trial_id=trial_config.trial_id,
+                    trial_number=trial_config.trial_number,
+                    trial_type=trial_config.trial_type,
+                    objective_values=[],
+                    detailed_metrics={},
+                    execution_info=execution_info,
+                    success=False,
+                    error_message=f"Trial cancelled: {e}",
+                    error_type="Cancelled",
+                )
+            
+            # Handle other exceptions normally
             execution_info.mark_completed()
             error_logger = self._get_trial_logger("controller")
             error_logger.error(f"Trial {trial_config.trial_id} failed: {e}")
@@ -792,7 +881,8 @@ class BaseTrialController(TrialController):
             # Wait briefly for the thread to exit cooperatively
             self._health_monitor_thread.join(timeout=10)
             if self._health_monitor_thread.is_alive():
-                vllm_logger.warning("Health monitoring thread did not stop within timeout; continuing cleanup")
+                vllm_logger.debug("Health monitoring thread did not stop within "  
+                 "timeout; continuing cleanup")
 
     def _terminate_benchmark(self):
         """Terminate the running benchmark process if vLLM has failed."""
@@ -852,71 +942,115 @@ class BaseTrialController(TrialController):
 
     def cleanup_resources(self):
         """Clean up vLLM server process and health monitoring."""
+        # Use trial-specific logger if available, otherwise fall back to module logger
+        controller_logger = self._get_trial_logger("controller")
+        
+        controller_logger.info(
+            "═══════════════════════════════════════════════════════════"
+        )
+        controller_logger.info(
+            "Trial Controller: Received cleanup request from backend"
+        )
+        controller_logger.info(
+            "═══════════════════════════════════════════════════════════"
+        )
+        
+        # IMMEDIATE FLUSH: Ensure user sees cleanup starting in real-time
+        self._flush_logger_handlers(controller_logger)
+        
         # Stop health monitoring first
+        controller_logger.info("Trial Controller: Stopping health monitoring...")
         self._stop_health_monitoring()
+        controller_logger.debug("Trial Controller: Health monitoring stopped")
+        self._flush_logger_handlers(controller_logger)
+        
+        # Terminate any running benchmark process
+        if self.benchmark_provider:
+            try:
+                controller_logger.info("Trial Controller: Terminating benchmark process...")
+                self._flush_logger_handlers(controller_logger)
+                self.benchmark_provider.terminate_benchmark()
+                controller_logger.info("Trial Controller: Benchmark process terminated")
+                self._flush_logger_handlers(controller_logger)
+            except Exception as e:
+                controller_logger.warning(f"Trial Controller: Error terminating benchmark process: {e}")
+                self._flush_logger_handlers(controller_logger)
         
         if self.vllm_process:
             pid = self.vllm_process.pid
+            controller_logger.info(f"Trial Controller: Cleaning up vLLM server process (PID: {pid})...")
+            self._flush_logger_handlers(controller_logger)
+            
             # Try to resolve the child's process group id upfront. If the process
             # has already exited, fall back to signaling the process directly.
             try:
                 pgid = os.getpgid(pid)
+                controller_logger.debug(f"Trial Controller: vLLM process group ID: {pgid}")
             except (OSError, ProcessLookupError):
-                logger.warning(f"Failed to get process group id for {pid}")
+                controller_logger.warning(f"Trial Controller: Failed to get process group id for {pid}")
                 pgid = None
 
             # Attempt graceful shutdown with SIGTERM first
-            logger.info(
-                f"Sending SIGTERM to vLLM process {pid} for graceful cleanup at time: {time.time()}"
+            controller_logger.info(
+                f"Trial Controller → vLLM: Sending SIGTERM to process {pid} "
+                f"for graceful shutdown..."
             )
+            self._flush_logger_handlers(controller_logger)
             try:
                 if pgid is not None:
                     os.killpg(pgid, signal.SIGTERM)
-                    # TODO: Cleanup logging levels after verifying health monitoring works
-                    logger.warning(f"Sent SIGTERM to process group {pgid} at time: {time.time()}")
+                    controller_logger.debug(f"Trial Controller: Sent SIGTERM to process group {pgid}")
                 else:
-                    logger.warning(f"No process group id found for {pid}, sending SIGTERM directly")
+                    controller_logger.debug(f"Trial Controller: No process group, sending SIGTERM to process {pid}")
                     self.vllm_process.terminate()
-                    # TODO: Cleanup logging levels after verifying health monitoring works
-                    logger.warning(f"Sent SIGTERM to process {pid} at time: {time.time()}")
             except (OSError, ProcessLookupError):
                 # Process already gone
+                controller_logger.info(f"Trial Controller: vLLM process {pid} already terminated")
                 self.vllm_process = None
-                # TODO: Cleanup logging levels after verifying health monitoring works
-                logger.warning(f"vLLM process {pid} already exited at time: {time.time()}")
                 return
+            
             try:
+                controller_logger.debug(f"Trial Controller: Waiting up to 10s for vLLM process {pid} to terminate...")
                 self.vllm_process.wait(timeout=10)
-                # TODO: Cleanup logging levels after verifying health monitoring works
-                logger.warning(f"Gracefully terminated vLLM process {pid} at time: {time.time()}")
+                controller_logger.info(f"Trial Controller: ✓ vLLM process {pid} terminated gracefully via SIGTERM")
+                self._flush_logger_handlers(controller_logger)
                 self.vllm_process = None
-                # TODO: Cleanup logging levels after verifying health monitoring works
-                logger.warning(f"vLLM process {pid} terminated gracefully at time: {time.time()}")
                 return
             except subprocess.TimeoutExpired:
-                logger.warning( # TODO: Cleanup logging levels after verifying health monitoring works
-                    f"SIGTERM timeout, escalating to SIGKILL for {pid} at time: {time.time()}"
+                controller_logger.warning(
+                    f"Trial Controller: vLLM process {pid} did not respond to SIGTERM within 10s. "
+                    f"Escalating to SIGKILL..."
                 )
+                self._flush_logger_handlers(controller_logger)
 
             # Final fallback: SIGKILL
             try:
                 if pgid is not None:
                     os.killpg(pgid, signal.SIGKILL)
-                    # TODO: Cleanup logging levels after verifying health monitoring works
-                    logger.warning(f"Sent SIGKILL to process group {pgid} at time: {time.time()}")
+                    controller_logger.info(f"Trial Controller: Sent SIGKILL to process group {pgid}")
                 else:
                     self.vllm_process.kill()
-                    # TODO: Cleanup logging levels after verifying health monitoring works
-                    logger.warning(f"Sent SIGKILL to process {pid} at time: {time.time()}")
-                # TODO: Cleanup logging levels after verifying health monitoring works
-                logger.warning(f"Force killed vLLM process {pid} at time: {time.time()}")
+                    controller_logger.info(f"Trial Controller: Sent SIGKILL to process {pid}")
+                controller_logger.info(f"Trial Controller: ✓ vLLM process {pid} force killed via SIGKILL")
+                self._flush_logger_handlers(controller_logger)
             except (OSError, ProcessLookupError) as e:
-                logger.warning(f"Failed to kill process {pid}: {e}")
-                logger.warning(f"Failed to force kill vLLM process {pid} at time: {time.time()}")
+                controller_logger.warning(f"Trial Controller: Failed to kill process {pid}: {e}")
+                self._flush_logger_handlers(controller_logger)
             finally:
                 self.vllm_process = None
-                # TODO: Cleanup logging levels after verifying health monitoring works
-                logger.warning(f"vLLM process {pid} force killed at time: {time.time()}")
+        else:
+            controller_logger.debug("Trial Controller: No vLLM process to cleanup")
+        
+        # Flush all trial logs to ensure cleanup messages are written
+        controller_logger.info("Trial Controller: Cleanup complete, flushing logs...")
+        for component_logger in self.trial_loggers.values():
+            for handler in component_logger.handlers:
+                try:
+                    handler.flush()
+                except Exception as e:
+                    # Use module logger as fallback since trial logger might be affected
+                    logger.debug(f"Failed to flush handler during cleanup: {e}")
+        controller_logger.info("Trial Controller: Log flush complete")
 
     @abstractmethod
     def _get_worker_id(self) -> str:

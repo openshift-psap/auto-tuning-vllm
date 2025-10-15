@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import signal
 import subprocess
 import tempfile
 from abc import ABC, abstractmethod
@@ -23,6 +24,8 @@ class BenchmarkProvider(ABC):
         self._logger = logger  # Default to module logger
         self._trial_context = None  # Store trial context for file paths
         self._process = None  # Track running benchmark process for termination
+        self._process_pid = None  # Store PID for cleanup even if process handle is gone
+        self._process_pgid = None  # Store process group ID for cleanup
     def set_logger(self, custom_logger):
         """Set a custom logger for this benchmark provider."""
         self._logger = custom_logger
@@ -35,18 +38,83 @@ class BenchmarkProvider(ABC):
         }
     
     def terminate_benchmark(self):
-        """Terminate the running benchmark process if active."""
-        if self._process and self._process.poll() is None:
-            self._logger.warning("Terminating benchmark process due to vLLM failure")
+        """Terminate the running benchmark process and its process group if active."""
+        # Try to use stored PID/PGID first, in case process handle is gone
+        pid = self._process_pid if self._process_pid else (self._process.pid if self._process else None)
+        pgid = self._process_pgid
+        
+        if pid is None:
+            self._logger.debug("Benchmark: No benchmark process to terminate")
+            return
+            
+        self._logger.info(f"Benchmark: Terminating benchmark process {pid} and its process group...")
+        
+        # Try to get process group ID if we don't have it
+        if pgid is None:
             try:
-                self._process.terminate()
-                self._process.wait(timeout=5)
-            except Exception as e:
-                self._logger.warning(f"Failed to terminate benchmark gracefully: {e}")
-                try:
-                    self._process.kill()
-                except Exception:
-                    pass
+                pgid = os.getpgid(pid)
+                self._logger.debug(f"Benchmark: Retrieved process group ID: {pgid}")
+            except (OSError, ProcessLookupError):
+                self._logger.debug(f"Benchmark: Process {pid} already gone or no process group")
+        
+        # Try graceful shutdown with SIGTERM first
+        try:
+            if pgid is not None:
+                os.killpg(pgid, signal.SIGTERM)
+                self._logger.info(f"Benchmark → Process Group: Sent SIGTERM to group {pgid}")
+            else:
+                os.kill(pid, signal.SIGTERM)
+                self._logger.info(f"Benchmark → Process: Sent SIGTERM to process {pid}")
+        except (OSError, ProcessLookupError):
+            # Process already gone
+            self._logger.info(f"Benchmark: Process {pid} already terminated")
+            self._process = None
+            self._process_pid = None
+            self._process_pgid = None
+            return
+        
+        # Wait for graceful shutdown (use a shorter timeout if process handle unavailable)
+        wait_timeout = 5 if self._process else 2
+        try:
+            if self._process:
+                self._process.wait(timeout=wait_timeout)
+            else:
+                # Wait by polling if no process handle
+                import time
+                for _ in range(int(wait_timeout * 10)):
+                    try:
+                        os.kill(pid, 0)  # Check if process exists
+                        time.sleep(0.1)
+                    except (OSError, ProcessLookupError):
+                        # Process is gone
+                        break
+                else:
+                    # Timeout - process still exists
+                    raise subprocess.TimeoutExpired(None, wait_timeout)
+                    
+            self._logger.info(f"Benchmark: ✓ Process {pid} terminated gracefully via SIGTERM")
+        except subprocess.TimeoutExpired:
+            self._logger.warning(
+                f"Benchmark: Process {pid} did not terminate within {wait_timeout}s. "
+                f"Escalating to SIGKILL..."
+            )
+            
+            # Force kill with SIGKILL
+            try:
+                if pgid is not None:
+                    os.killpg(pgid, signal.SIGKILL)
+                    self._logger.info(f"Benchmark → Process Group: Sent SIGKILL to group {pgid}")
+                else:
+                    os.kill(pid, signal.SIGKILL)
+                    self._logger.info(f"Benchmark → Process: Sent SIGKILL to process {pid}")
+                self._logger.info(f"Benchmark: ✓ Process {pid} force killed via SIGKILL")
+            except (OSError, ProcessLookupError) as e:
+                self._logger.debug(f"Benchmark: Process {pid} already gone during SIGKILL: {e}")
+        finally:
+            self._process = None
+            self._process_pid = None
+            self._process_pgid = None
+
     @abstractmethod
     def run_benchmark(self, model_url: str, config: BenchmarkConfig) -> Dict[str, Any]:
         """
@@ -113,12 +181,23 @@ class GuideLLMBenchmark(BenchmarkProvider):
             self._logger.info(f"Results will be saved to: {results_file}")
             
             # Use Popen so we can terminate if vLLM dies
+            # start_new_session=True puts it in its own process group for clean termination
             self._process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True
+                text=True,
+                start_new_session=True
             )
+            
+            # Store PID and PGID immediately for cleanup, even if process handle is lost
+            self._process_pid = self._process.pid
+            try:
+                self._process_pgid = os.getpgid(self._process_pid)
+                self._logger.debug(f"Started GuideLLM process {self._process_pid} in process group {self._process_pgid}")
+            except (OSError, ProcessLookupError):
+                self._logger.warning(f"Failed to get process group for GuideLLM process {self._process_pid}")
+                self._process_pgid = None
 
             stdout, stderr, returncode = None, None, None
             
@@ -136,9 +215,11 @@ class GuideLLMBenchmark(BenchmarkProvider):
                 raise RuntimeError(
                     f"GuideLLM benchmark timed out after {timeout_seconds} seconds"
                 ) from e
-
             finally:
+                # Clear process tracking after communicate() completes
                 self._process = None
+                self._process_pid = None
+                self._process_pgid = None
             
             if stdout is not None:
                 self._logger.info(f"GuideLLM stdout:\n{stdout}")

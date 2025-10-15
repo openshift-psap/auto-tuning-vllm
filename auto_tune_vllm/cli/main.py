@@ -26,6 +26,9 @@ app = typer.Typer(
     add_completion=False,
 )
 
+# Setup logger for CLI
+logger = logging.getLogger(__name__)
+
 
 def setup_logging(verbose: bool = False):
     """Setup logging with Rich handler."""
@@ -390,6 +393,12 @@ def run_optimization_sync(
             progress.update(
                 task, completed=total_trials, description="✅ Optimization completed"
             )
+        except KeyboardInterrupt:
+            # User interrupted with Ctrl+C
+            progress.update(task, description="⚠️  Optimization interrupted by user")
+            logger.warning("Keyboard interrupt received (Ctrl+C). Initiating graceful shutdown...")
+            console.print("\n[yellow]⚠️  Interrupt signal received. Cleaning up active trials...[/yellow]")
+            raise
         except Exception:
             # Mark task as failed and re-raise
             progress.update(task, description="❌ Optimization failed")

@@ -534,18 +534,49 @@ class StudyController:
             logger.info(f"Optimization completed: {self.completed_trials} trials")
             return self.study
 
+        except KeyboardInterrupt:
+            logger.warning(
+                "╔═══════════════════════════════════════════════════════════╗"
+            )
+            logger.warning(
+                "║  INTERRUPT SIGNAL RECEIVED - Initiating graceful shutdown ║"
+            )
+            logger.warning(
+                "╚═══════════════════════════════════════════════════════════╝"
+            )
+            logger.info(
+                f"Study interrupted with {len(self.active_trials)} active trial(s). "
+                f"Completed {self.completed_trials}/{total_trials} trials before interrupt."
+            )
+            if self.active_trials:
+                logger.info(
+                    f"Active trials being cleaned up: {list(self.active_trials.keys())}"
+                )
+            raise
         except Exception as e:
             logger.error(f"Optimization failed: {e}")
             raise
         finally:
             # Clean up all active trials before shutting down the backend
             try:
-                logger.info("Initiating cleanup of all active trials...")
+                if self.active_trials:
+                    logger.info(
+                        f"Initiating cleanup of {len(self.active_trials)} active trial(s)..."
+                    )
+                    logger.info(
+                        "Communicating cleanup request to trial controllers via backend..."
+                    )
+                else:
+                    logger.info("No active trials to cleanup.")
+                
                 self.backend.cleanup_all_trials()
+                logger.info("Trial cleanup completed successfully.")
             except Exception as cleanup_e:
                 logger.error(f"Error during trial cleanup: {cleanup_e}")
             finally:
+                logger.info("Shutting down execution backend...")
                 self.backend.shutdown()
+                logger.info("Backend shutdown complete.")
 
     def _submit_available_trials(self, remaining_trials: int, max_concurrent: float):
         """Submit new trials up to limits."""
