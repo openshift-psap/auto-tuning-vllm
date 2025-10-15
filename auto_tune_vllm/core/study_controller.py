@@ -674,32 +674,90 @@ class StudyController:
         )
 
     def _set_trial_user_attributes(self, trial_number: int, result: TrialResult):
-        """Store error information as trial user attributes in Optuna database.
+        """
+        Store timing and error information as trial user attributes in Optuna database.
 
-        Stores error_type and error_message in trial_user_attributes table
-        for post-study failure analysis.
+        Stores timing metrics, error_type, and error_message in trial_user_attributes
+        table for post-study analysis.
 
         Why we cache trial objects:
         - trial objects from study.ask() allow calling set_user_attr() before tell()
         - self.study.trials[trial_number] doesn't exist until AFTER tell() is called
         - Uses public API (trial.set_user_attr) to avoid Optuna internal dependencies
         """
-        if result.success:
-            return  # Only store attributes for failed trials
-
         try:
             if trial_number not in self.trial_objects:
                 logger.warning(
-                    f"Trial {trial_number} not in cache, cannot store error attributes"
+                    f"Trial {trial_number} not in cache, cannot store user attributes"
                 )
                 return
 
             trial = self.trial_objects[trial_number]
-            trial.set_user_attr("error_type", result.error_type)
-            trial.set_user_attr("error_message", result.error_message)
-            logger.info(
-                f"Stored error attributes for trial {trial_number}: {result.error_type}"
-            )
+
+            # Store timing information for ALL trials (success and failure)
+            if result.execution_info:
+                exec_info = result.execution_info
+                from datetime import datetime
+
+                # Set timestamp attributes (ISO format for better readability)
+                if exec_info.start_time:
+                    trial.set_user_attr(
+                        "trial_start_time",
+                        datetime.fromtimestamp(exec_info.start_time).isoformat(),
+                    )
+
+                if exec_info.end_time:
+                    trial.set_user_attr(
+                        "trial_end_time",
+                        datetime.fromtimestamp(exec_info.end_time).isoformat(),
+                    )
+
+                # Set duration attributes (in seconds)
+                if exec_info.vllm_startup_duration is not None:
+                    trial.set_user_attr(
+                        "vllm_startup_duration_seconds",
+                        round(exec_info.vllm_startup_duration, 2),
+                    )
+
+                if exec_info.benchmark_duration is not None:
+                    trial.set_user_attr(
+                        "benchmark_duration_seconds",
+                        round(exec_info.benchmark_duration, 2),
+                    )
+
+                if exec_info.duration_seconds is not None:
+                    trial.set_user_attr(
+                        "total_duration_seconds",
+                        round(exec_info.duration_seconds, 2),
+                    )
+
+                # Set status attributes
+                if exec_info.trial_status:
+                    trial.set_user_attr("trial_status", exec_info.trial_status)
+
+                if exec_info.worker_node_id:
+                    trial.set_user_attr("worker_node_id", exec_info.worker_node_id)
+
+            # Store error information for failed trials
+            if not result.success:
+                if result.error_type:
+                    trial.set_user_attr("error_type", result.error_type)
+                if result.error_message:
+                    trial.set_user_attr("error_message", result.error_message)
+                logger.info(
+                    f"Stored error attributes for trial {trial_number}: "
+                    f"{result.error_type}"
+                )
+
+            # Log timing attributes stored
+            if result.execution_info:
+                logger.debug(
+                    f"Stored timing attributes for trial {trial_number}: "
+                    f"vllm_startup={result.execution_info.vllm_startup_duration}s, "
+                    f"benchmark={result.execution_info.benchmark_duration}s, "
+                    f"total={result.execution_info.duration_seconds}s, "
+                    f"status={result.execution_info.trial_status}"
+                )
         except Exception as e:
             logger.error(
                 f"Failed to store user attributes for trial {trial_number}: {e}",

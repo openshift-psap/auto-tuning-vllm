@@ -135,17 +135,51 @@ class TrialConfig:
 
 @dataclass
 class ExecutionInfo:
-    """Information about trial execution."""
+    """Information about trial execution with detailed timing phases."""
 
     worker_node_id: Optional[str] = None
     start_time: float = field(default_factory=time.time)
     end_time: Optional[float] = None
     duration_seconds: Optional[float] = None
 
-    def mark_completed(self):
-        """Mark execution as completed."""
+    # Detailed timing phases
+    vllm_start_time: Optional[float] = None
+    vllm_ready_time: Optional[float] = None
+    benchmark_start_time: Optional[float] = None
+    benchmark_end_time: Optional[float] = None
+
+    # Derived timing metrics
+    vllm_startup_duration: Optional[float] = None
+    benchmark_duration: Optional[float] = None
+    trial_status: Optional[str] = None  # "success", "vllm_crash", "benchmark_crash"
+
+    def mark_vllm_started(self):
+        """Mark when vLLM server process started."""
+        self.vllm_start_time = time.time()
+
+    def mark_vllm_ready(self):
+        """Mark when vLLM server became healthy and ready."""
+        self.vllm_ready_time = time.time()
+        if self.vllm_start_time:
+            self.vllm_startup_duration = self.vllm_ready_time - self.vllm_start_time
+
+    def mark_benchmark_started(self):
+        """Mark when benchmark execution started."""
+        self.benchmark_start_time = time.time()
+
+    def mark_benchmark_completed(self):
+        """Mark when benchmark execution completed."""
+        self.benchmark_end_time = time.time()
+        if self.benchmark_start_time:
+            self.benchmark_duration = (
+                self.benchmark_end_time - self.benchmark_start_time
+            )
+
+    def mark_completed(self, status: str = "success"):
+        """Mark execution as completed with status."""
         self.end_time = time.time()
         self.duration_seconds = self.end_time - self.start_time
+        self.trial_status = status
 
 
 @dataclass
