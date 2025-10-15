@@ -5,14 +5,19 @@ from __future__ import annotations
 import logging
 import os
 import signal
+import shutil
 import subprocess
+import threading
 import time
 from abc import ABC, abstractmethod
 from typing import Optional
 
 import ray
 
-from ..benchmarks.providers import BenchmarkProvider, GuideLLMBenchmark
+from ..benchmarks.providers import (
+    BenchmarkProvider,
+    get_benchmark_provider,
+)
 from ..core.trial import ExecutionInfo, TrialConfig, TrialResult
 from ..logging.manager import CentralizedLogger
 
@@ -108,8 +113,6 @@ class BaseTrialController(TrialController):
             "python3": "Python interpreter",
             "guidellm": "GuideLLM CLI tool",
         }
-
-        import shutil
 
         missing_commands = []
 
@@ -402,25 +405,7 @@ class BaseTrialController(TrialController):
         self, trial_config: TrialConfig
     ) -> BenchmarkProvider:
         """Create appropriate benchmark provider."""
-        benchmark_type = trial_config.benchmark_config.benchmark_type
-
-        if benchmark_type == "guidellm":
-            return GuideLLMBenchmark()
-        else:
-            # Import custom provider by name
-            # This enables extensibility for custom benchmarks
-            return self._import_custom_benchmark(benchmark_type)
-
-    def _import_custom_benchmark(self, benchmark_type: str) -> BenchmarkProvider:
-        """Dynamically import custom benchmark provider."""
-        try:
-            # Try to import from benchmarks.custom module
-            module_name = f"auto_tune_vllm.benchmarks.custom.{benchmark_type}"
-            module = __import__(module_name, fromlist=[benchmark_type])
-            provider_class = getattr(module, f"{benchmark_type.title()}Benchmark")
-            return provider_class()
-        except (ImportError, AttributeError) as e:
-            raise ValueError(f"Unknown benchmark provider: {benchmark_type}") from e
+        return get_benchmark_provider(trial_config.benchmark_config.benchmark_type)
 
     def _log_python_environment(self, logger):
         """Log Python environment information for debugging."""
