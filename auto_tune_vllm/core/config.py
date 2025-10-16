@@ -723,14 +723,13 @@ class ConfigValidator:
             )
 
         # Handle constraint parsing
-        constraints = None
+        constraints = []
         if "constraints" in raw_config:
             constraint_data = raw_config["constraints"]
             if constraint_data is not None:
                 if not isinstance(constraint_data, list):
-                    raise TypeError(
-                        "Constraints must be provided as a list of expression strings"
-                    )
+                    msg = "Constraints must be provided as a list of expression strings"
+                    raise TypeError(msg)
                 constraints = [Constraint(expression=expr) for expr in constraint_data]
 
         return StudyConfig(
