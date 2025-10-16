@@ -42,11 +42,9 @@ class BenchmarkProvider(ABC):
     def terminate_benchmark(self):
         """Terminate the running benchmark process and its process group if active."""
         # Try to use stored PID/PGID first, in case process handle is gone
-        pid = (
-            self._process_pid
-            if self._process_pid
-            else (self._process.pid if self._process else None)
-        )
+        pid = self._process_pid
+        if pid is None:  # first check, if PID is still none after this we will return
+            pid = self._process.pid if self._process else None
         pgid = self._process_pgid
         
         if pid is None:
