@@ -347,7 +347,7 @@ class BaseTrialController(TrialController):
                             timeout=0.2
                         )
                         return is_cancelled
-                    except Exception:
+                    except (Exception, GetTimeoutError) as _:
                         return False
                 return self._cancellation_requested
             
