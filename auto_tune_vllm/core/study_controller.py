@@ -604,6 +604,8 @@ class StudyController:
             self.trial_objects[trial.number] = trial
 
             trial_config = self._build_trial_config(trial)
+            # Increasing the timeout for vLLM startup
+            trial_config.vllm_startup_timeout = int(self.config.static_environment_variables.get("VLLM_STARTUP_TIMEOUT", 300))
 
             try:
                 job_handle = self.backend.submit_trial(trial_config)
