@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import optuna
 import optuna.integration
@@ -15,6 +15,7 @@ from optuna.samplers import (
     RandomSampler,
     TPESampler,
 )
+from optuna.trial import TrialState
 
 from ..execution.backends import ExecutionBackend, JobHandle
 from ..logging.manager import CentralizedLogger
@@ -579,24 +580,20 @@ class StudyController:
     def _submit_available_trials(self, remaining_trials: int, max_concurrent: float):
         """Submit new trials up to limits."""
         while remaining_trials > 0 and len(self.active_trials) < max_concurrent:
-            # Ask Optuna for next trial
-            try:
-                trial = self.study.ask()
-            except Exception as e:
-                logger.error(f"Failed to get next trial from Optuna: {e}")
-                break
+            trial = self.study.ask()
 
             # Check if these exact parameters have already been tried and failed
-            if self._is_duplicate_failed_trial(trial.params):
-                logger.warning(
-                    f"Trial {trial.number} has duplicate parameters from a previous "
-                    f"failed trial. Skipping: {trial.params}"
+            if self._is_duplicate_trial(trial.params):
+                log_msg = (
+                    "Trial %d has duplicate parameters from a previous failed trial."
+                    "Skipping: %s"
                 )
+                logger.warning(log_msg, trial.number, trial.params)
                 # Mark as failed immediately without running
                 self.study.tell(
                     trial=trial.number,
                     values=None,
-                    state=optuna.trial.TrialState.FAIL,
+                    state=TrialState.FAIL,
                 )
                 continue  # Ask for another trial
 
@@ -612,11 +609,12 @@ class StudyController:
                 constraint_violated = self._check_constraints(trial_config.parameters)
                 if constraint_violated:
                     logger.info(
-                        f"Trial {trial.number} violates constraints, pruning. "
-                        f"Parameters: {trial.params}"
+                        "Trial %d violates constraints, pruning. Parameters: %s",
+                        trial.number,
+                        trial.params,
                     )
                     # Mark trial as pruned in Optuna
-                    self.study.tell(trial.number, state=optuna.trial.TrialState.PRUNED)
+                    self.study.tell(trial.number, state=TrialState.PRUNED)
                     remaining_trials -= 1
                     continue
 
@@ -625,17 +623,17 @@ class StudyController:
                 self.active_trials[trial_config.trial_id] = job_handle
 
                 logger.info(
-                    f"Submitted trial {trial.number} with parameters: {trial.params}"
+                    "Submitted trial %d with parameters: %s", trial.number, trial.params
                 )
                 remaining_trials -= 1
 
             except Exception as e:
-                logger.error(f"Failed to submit trial {trial.number}: {e}")
+                logger.error("Failed to submit trial %d: %s", trial.number, e)
                 # Mark trial as failed in Optuna
                 self.study.tell(
                     trial=trial.number,
                     values=None,
-                    state=optuna.trial.TrialState.FAIL,
+                    state=TrialState.FAIL,
                 )  # Failed trial
                 # Clean up cached trial object
                 if trial.number in self.trial_objects:
@@ -673,18 +671,19 @@ class StudyController:
                         self.study.tell(
                             trial=result.trial_number,
                             values=result.objective_values,
-                            state=optuna.trial.TrialState.COMPLETE,
+                            state=TrialState.COMPLETE,
                         )
                         logger.info(
-                            f"Trial {trial_id} completed successfully: "
-                            f"{result.objective_values}"
+                            "Trial %s completed successfully: %s",
+                            trial_id,
+                            result.objective_values,
                         )
                     else:
                         # Failed trial
                         self.study.tell(
                             trial=result.trial_number,
                             values=None,
-                            state=optuna.trial.TrialState.FAIL,
+                            state=TrialState.FAIL,
                         )
                         logger.error(f"Trial {trial_id} failed: {result.error_message}")
 
@@ -708,7 +707,7 @@ class StudyController:
 
         return optimization_completed_count
 
-    def _is_duplicate_failed_trial(self, params: Dict) -> bool:
+    def _is_duplicate_trial(self, params: dict[str, Any]) -> bool:
         """
         Check if the given parameters match any previously failed trial.
 
@@ -726,7 +725,9 @@ class StudyController:
         """
         # Get failed trials (with caching for better performance)
         failed_trials = [
-            t for t in self.study.trials if t.state == optuna.trial.TrialState.FAIL
+            trial
+            for trial in self.study.trials
+            if trial.state in (TrialState.FAIL, TrialState.PRUNED)
         ]
 
         for past_trial in failed_trials:
@@ -734,14 +735,17 @@ class StudyController:
             # Both dicts should have the same keys and values
             if past_trial.params == params:
                 logger.debug(
-                    f"Found duplicate parameters in failed trial "
-                    f"{past_trial.number}: {params}"
+                    "Found duplicate parameters in failed trial %s: %s",
+                    past_trial.number,
+                    params,
                 )
                 return True
 
-    def _check_constraints(self, parameters: Dict) -> bool:
+        return False
+
+    def _check_constraints(self, parameters: dict[str, Any]) -> bool:
         """
-        Check if any constraint is violated.
+        Check if any constraints are violated.
 
         Args:
             parameters: Dictionary of parameter names to values
@@ -754,15 +758,19 @@ class StudyController:
                 result = constraint.evaluate_constraint(parameters)
                 if result > 0:
                     logger.debug(
-                        f"Constraint violated: {constraint.expression} = {result} > 0"
+                        "Constraint violated: %s = %s > 0",
+                        constraint.expression,
+                        result,
                     )
                     return True
-            except Exception as e:
+            except Exception as err:
                 logger.warning(
-                    f"Failed to evaluate constraint '{constraint.expression}': {e}. "
-                    f"Treating as violated."
+                    "Failed to evaluate constraint '%s': %s. Treating as violated.",
+                    constraint.expression,
+                    err,
                 )
                 return True
+
         return False
 
     def _build_trial_config(self, trial: optuna.Trial) -> TrialConfig:
