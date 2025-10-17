@@ -2,20 +2,22 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
-from typing import Any, Dict
+from typing import Any
 
-from .base import BenchmarkProvider
+from typing_extensions import override
+
 from ..config import BenchmarkConfig
+from .base import BenchmarkProvider
 
 
 class CustomBenchmarkTemplate(BenchmarkProvider):
     """Template for implementing custom benchmark providers."""
 
+    @override
     def start_benchmark(
         self, model_url: str, config: BenchmarkConfig
-    ) -> subprocess.Popen:
+    ) -> subprocess.Popen[str]:
         """
         Template implementation for starting custom benchmarks.
 
@@ -37,7 +39,8 @@ class CustomBenchmarkTemplate(BenchmarkProvider):
         """
         raise NotImplementedError("CustomBenchmarkTemplate is a template only")
 
-    def parse_results(self) -> Dict[str, Any]:
+    @override
+    def parse_results(self) -> dict[str, Any]:
         """
         Template implementation for parsing benchmark results.
 
