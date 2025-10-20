@@ -5,12 +5,15 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
 
 from typing_extensions import override
+
+from auto_tune_vllm.core.trial import TrialConfig
 
 from ..config import BenchmarkConfig
 from .base import BenchmarkProvider
@@ -38,6 +41,18 @@ class GuideLLMBenchmark(BenchmarkProvider):
         "request_concurrency": "successful",
     }
 
+    def __init__(self, *, trial_config: TrialConfig):
+        super().__init__()
+        self._trial_config: TrialConfig = trial_config
+        self.validation_checks()
+
+    def validation_checks(self):
+        if shutil.which("guidellm") is None:
+            raise RuntimeError(
+                "GuideLLM CLI not found on PATH. "
+                "Please install or provide the full path."
+            )
+
     @override
     def start_benchmark(
         self, model_url: str, config: BenchmarkConfig
@@ -48,26 +63,14 @@ class GuideLLMBenchmark(BenchmarkProvider):
         Returns:
             Popen process handle for polling by caller
         """
-        self._logger.info(f"Starting GuideLLM benchmark for {config.model}")
-
-        # Create results file path directly in permanent location
-        self._results_file: str = self._get_results_file_path()
-
-        # Build GuideLLM command
-        cmd = self._build_guidellm_command(model_url, config, self._results_file)
-
-        # Validate binary and basic inputs
-        import shutil
-
-        if shutil.which("guidellm") is None:
-            raise RuntimeError(
-                "GuideLLM CLI not found on PATH. "
-                "Please install or provide the full path."
-            )
         if not (model_url.startswith("http://") or model_url.startswith("https://")):
             raise ValueError(f"Invalid model_url: {model_url!r} (expected http/https)")
 
-        # Run GuideLLM
+        self._logger.info(f"Starting GuideLLM benchmark for {config.model}")
+        self._results_file: str = self._get_results_file_path()
+
+        cmd = self._build_guidellm_command(model_url, config, self._results_file)
+
         self._logger.info(f"Running: {' '.join(cmd)}")
         self._logger.info(f"Results will be saved to: {self._results_file}")
 

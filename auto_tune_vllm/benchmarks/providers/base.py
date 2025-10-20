@@ -6,6 +6,7 @@ import logging
 import os
 import signal
 import subprocess
+import time
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -30,6 +31,18 @@ class BenchmarkProvider(ABC):
         self._process_pgid: int | None = None
         # Function to check for cancellation
         self._cancellation_flag: bool | None = None
+
+    def __del__(self):
+        self.terminate_benchmark()
+
+    def __enter__(self):
+        """Context manager entry point."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+        """Context manager exit point - ensures benchmark process cleanup."""
+        self.terminate_benchmark()
+        return False  # Don't suppress exceptions
 
     def set_logger(self, custom_logger: logging.Logger):
         """Set a custom logger for this benchmark provider."""
@@ -92,9 +105,6 @@ class BenchmarkProvider(ABC):
             if self._process:
                 self._process.wait(timeout=wait_timeout)
             else:
-                # Wait by polling if no process handle
-                import time
-
                 for _ in range(int(wait_timeout * 10)):
                     try:
                         os.kill(pid, 0)  # Check if process exists
