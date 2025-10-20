@@ -388,9 +388,7 @@ class BaseTrialController(TrialController):
                 f"Waiting for server at {server_info['url']} to be ready "
                 f"(timeout: {trial_config.vllm_startup_timeout}s)"
             )
-            self._vllm._wait_for_server_ready(
-                server_info["url"], trial_config.vllm_startup_timeout
-            )
+            self._vllm.wait_for_server_ready(trial_config.vllm_startup_timeout)
             execution_info.mark_vllm_ready()
 
             # Main execution loop - concise with extracted state handlers
@@ -545,7 +543,7 @@ class BaseTrialController(TrialController):
         benchmark_type = trial_config.benchmark_config.benchmark_type
 
         if benchmark_type == "guidellm":
-            return GuideLLMBenchmark(trial_config=trial_config)
+            return GuideLLMBenchmark()
         else:
             # For now we have no other benchmarks except guideLLM
             raise NotImplementedError
@@ -1119,7 +1117,7 @@ class BaseTrialController(TrialController):
                 )
                 self._flush_logger_handlers(controller_logger)
 
-        if self._vllm:
+        if self._vllm and self._vllm.process:
             pid = self._vllm.process.pid
             controller_logger.info(
                 f"Trial Controller: Cleaning up vLLM server process (PID: {pid})..."

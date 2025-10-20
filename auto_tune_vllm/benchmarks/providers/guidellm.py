@@ -42,6 +42,12 @@ class GuideLLMBenchmark(BenchmarkProvider):
 
     def __init__(self):
         super().__init__()
+        # Typed fields to satisfy static analysis and enforce invariants
+        self._process: subprocess.Popen[str] | None = None
+        self._process_pid: int | None = None
+        self._process_pgid: int | None = None
+        self._results_file: str | None = None
+        self._started: bool = False
         self.validation_checks()
 
     def validation_checks(self):
@@ -61,14 +67,14 @@ class GuideLLMBenchmark(BenchmarkProvider):
         Returns:
             Popen process handle for polling by caller
         """
-        if self._started:
+        if self._started and self._process:
             return self._process
 
         if not (model_url.startswith("http://") or model_url.startswith("https://")):
             raise ValueError(f"Invalid model_url: {model_url!r} (expected http/https)")
 
         self._logger.info(f"Starting GuideLLM benchmark for {config.model}")
-        self._results_file: str = self._get_results_file_path()
+        self._results_file = self._get_results_file_path()
 
         cmd = self._build_guidellm_command(model_url, config, self._results_file)
 
@@ -196,8 +202,8 @@ class GuideLLMBenchmark(BenchmarkProvider):
         if config.dataset is None:
             data_config = self._build_synthetic_dataset_args(config)
             cmd.extend(["--data", json.dumps(data_config)])
-        else: # dataset is an explicit path
-            if config.dataset.startswith("hf://"): # huggingface dataset
+        else:  # dataset is an explicit path
+            if config.dataset.startswith("hf://"):  # huggingface dataset
                 dataset_name = config.dataset[5:]  # Remove "hf://" prefix
                 cmd.extend(["--data-type", "huggingface", "--dataset", dataset_name])
             else:

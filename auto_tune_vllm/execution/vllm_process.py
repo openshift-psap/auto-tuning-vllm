@@ -34,13 +34,12 @@ class vLLMProcess:
             "--model",
             self._trial_config.benchmark_config.model,
             "--port",
-            str(port),
+            str(self._port),
             "--host",
             "0.0.0.0",
             "--no-enable-prefix-caching",
         ]
         cmd.extend(self._trial_config.vllm_args)
-
         self.logger.info(f"Starting vLLM server: {' '.join(cmd)}")
 
         return cmd
@@ -102,7 +101,7 @@ class vLLMProcess:
     def url_for(self, *parts: str) -> str:
         return self.url_root + "/" + "/".join(parts)
 
-    def _wait_for_server_ready(self, timeout: int = 300):
+    def wait_for_server_ready(self, timeout: int = 300):
         """Wait for vLLM server to be ready."""
 
         start_time = time.time()
