@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import os
@@ -12,8 +13,6 @@ from pathlib import Path
 from typing import Any
 
 from typing_extensions import override
-
-from auto_tune_vllm.core.trial import TrialConfig
 
 from ..config import BenchmarkConfig
 from .base import BenchmarkProvider
@@ -41,9 +40,8 @@ class GuideLLMBenchmark(BenchmarkProvider):
         "request_concurrency": "successful",
     }
 
-    def __init__(self, *, trial_config: TrialConfig):
+    def __init__(self):
         super().__init__()
-        self._trial_config: TrialConfig = trial_config
         self.validation_checks()
 
     def validation_checks(self):
@@ -63,6 +61,9 @@ class GuideLLMBenchmark(BenchmarkProvider):
         Returns:
             Popen process handle for polling by caller
         """
+        if self._started:
+            return self._process
+
         if not (model_url.startswith("http://") or model_url.startswith("https://")):
             raise ValueError(f"Invalid model_url: {model_url!r} (expected http/https)")
 
@@ -97,6 +98,9 @@ class GuideLLMBenchmark(BenchmarkProvider):
                 f"Failed to get process group for GuideLLM process {self._process_pid}"
             )
             self._process_pgid = None
+
+        atexit.register(self.terminate_benchmark)
+        self._started = True
 
         return self._process
 

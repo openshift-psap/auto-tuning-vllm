@@ -10,7 +10,7 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any
 
-from auto_tune_vllm.benchmarks.config import BenchmarkConfig
+from ..config import BenchmarkConfig
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,7 @@ class BenchmarkProvider(ABC):
         self._process_pgid: int | None = None
         # Function to check for cancellation
         self._cancellation_flag: bool | None = None
+        self._started: bool = False
 
     def __del__(self):
         self.terminate_benchmark()
