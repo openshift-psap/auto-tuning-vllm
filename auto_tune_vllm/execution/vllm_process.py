@@ -9,6 +9,8 @@ import requests
 
 from auto_tune_vllm.core.trial import TrialConfig
 
+HTTPS_OK = 200
+
 
 class vLLMProcess:
     def __init__(self, logger: logging.Logger, trial_config: TrialConfig):
@@ -124,7 +126,7 @@ class vLLMProcess:
 
             try:
                 response = requests.get(health_url, timeout=5)
-                if response.status_code == 200:
+                if response.status_code == HTTPS_OK:  # universal http 200 OK
                     self.logger.info(f"vLLM server ready at {self.url_root}")
                     return
             except requests.exceptions.RequestException as e:
