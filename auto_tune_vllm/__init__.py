@@ -20,10 +20,11 @@ from .execution.backends import LocalExecutionBackend, RayExecutionBackend
 
 __all__ = [
     "StudyController",
-    "StudyConfig", 
+    "StudyConfig",
     "ParameterConfig",
     "RayExecutionBackend",
-    "LocalExecutionBackend", 
+    "LocalExecutionBackend",
     "GuideLLMBenchmark",
     "BenchmarkProvider",
 ]
+

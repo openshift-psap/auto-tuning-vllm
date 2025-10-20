@@ -9,17 +9,20 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 from abc import ABC, abstractmethod
 from enum import Enum, auto
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import ray
+import requests
 from typing_extensions import override
 
-from ..benchmarks.providers import BenchmarkProvider, GuideLLMBenchmark
+from ..benchmarks import BenchmarkProvider, GuideLLMBenchmark
 from ..core.trial import ExecutionInfo, TrialConfig, TrialResult
 from ..logging.manager import CentralizedLogger
+from .vllm_process import vLLMProcess
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +87,7 @@ class BaseTrialController(TrialController):
         self._benchmark_process = None  # Track running benchmark process
         # Flag for external cancellation requests
         self._cancellation_requested: bool = False
+        self._vllm: vLLMProcess | None = None
 
     def _validate_environment(self, trial_config: Optional[TrialConfig] = None) -> None:
         """Validate that all required packages are available on this worker."""
@@ -128,6 +132,7 @@ class BaseTrialController(TrialController):
         required_commands = {
             "python3": "Python interpreter",
             "guidellm": "GuideLLM CLI tool",
+            "vllm": "vLLM CLI tool",
         }
 
         missing_commands = []
@@ -232,7 +237,7 @@ class BaseTrialController(TrialController):
         """
         return self.trial_loggers.get(component, logger)
 
-    def _flush_logger_handlers(self, target_logger):
+    def _flush_logger_handlers(self, target_logger: logging.Logger):
         """
         Immediately flush all handlers for a specific logger.
         This ensures logs appear in real-time during critical operations like cleanup.
@@ -382,7 +387,7 @@ class BaseTrialController(TrialController):
                 f"Waiting for server at {server_info['url']} to be ready "
                 f"(timeout: {trial_config.vllm_startup_timeout}s)"
             )
-            self._wait_for_server_ready(
+            self._vllm._wait_for_server_ready(
                 server_info["url"], trial_config.vllm_startup_timeout
             )
             execution_info.mark_vllm_ready()
@@ -713,7 +718,6 @@ class BaseTrialController(TrialController):
 
         Returns (benchmark_process, start_time) on success, None otherwise.
         """
-        import requests
 
         # Check timeout
         elapsed = time.time() - vllm_start_time
@@ -724,15 +728,15 @@ class BaseTrialController(TrialController):
             )
 
         # Check if vLLM process died
-        if self.vllm_process and self.vllm_process.poll() is not None:
+        if self._vllm and self._vllm.process and self._vllm.process.poll() is not None:
             raise RuntimeError(
                 f"vLLM process died during startup with exit code "
-                f"{self.vllm_process.returncode}"
+                f"{self._vllm.process.returncode}"
             )
 
         # Check if server is ready
         try:
-            health_url = server_info["url"].replace("/v1", "/health")
+            health_url = self._vllm.url_for("health")
             response = requests.get(health_url, timeout=2)
             if response.status_code == 200:
                 logger.info(
@@ -833,54 +837,13 @@ class BaseTrialController(TrialController):
 
         return None  # Still running, continue polling
 
-    def _start_vllm_server(self, trial_config: TrialConfig) -> dict:
+    def _start_vllm_server(self, trial_config: TrialConfig) -> dict[str, Any]:
         """Start vLLM server with trial parameters."""
-        port = self._get_available_port()
         vllm_logger = self._get_trial_logger("vllm")
-
-        # Log Python environment information for debugging
+        vllm_proc = vLLMProcess(logger=vllm_logger, trial_config=trial_config)
         self._log_python_environment(vllm_logger)
-
-        # Build vLLM command
-        cmd = [
-            "python3",
-            "-m",
-            "vllm.entrypoints.openai.api_server",
-            "--model",
-            trial_config.benchmark_config.model,
-            "--port",
-            str(port),
-            "--host",
-            "0.0.0.0",
-            "--no-enable-prefix-caching",
-        ]
-
-        # Add trial-specific parameters
-        cmd.extend(trial_config.vllm_args)
-
-        vllm_logger.info(f"Starting vLLM server: {' '.join(cmd)}")
-
-        # Prepare environment variables
-        env = os.environ.copy()
-        trial_env_vars = trial_config.environment_vars
-        if trial_env_vars:
-            env.update(trial_env_vars)
-            vllm_logger.info(f"Environment variables: {trial_env_vars}")
-
-        # Start process with captured output
-        self.vllm_process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,  # Combine stderr with stdout
-            text=True,
-            bufsize=1,  # Line buffered
-            universal_newlines=True,
-            env=env,  # Pass environment variables to the process
-            start_new_session=True,  # Put child in its own process group/session
-        )
-
-        # Start a thread to capture and log vLLM output
-        import threading
+        status = vllm_proc.start()
+        self.vllm_process = vllm_proc.process
 
         def log_vllm_output():
             try:
@@ -893,59 +856,9 @@ class BaseTrialController(TrialController):
         log_thread = threading.Thread(target=log_vllm_output, daemon=True)
         log_thread.start()
 
-        return {
-            "port": port,
-            "url": f"http://localhost:{port}/v1",
-            "pid": self.vllm_process.pid,
-        }
+        self._vllm = vllm_proc
 
-    def _get_available_port(self) -> int:
-        """Get an available port for vLLM server."""
-        import socket
-
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("", 0))
-            s.listen(1)
-            port = s.getsockname()[1]
-
-        return port
-
-    def _wait_for_server_ready(self, url: str, timeout: int = 300):
-        """Wait for vLLM server to be ready."""
-        import requests
-
-        vllm_logger = self._get_trial_logger("vllm")
-        start_time = time.time()
-        health_url = url.replace("/v1", "/health")
-
-        vllm_logger.info(
-            f"Waiting for vLLM server to be ready at {health_url} (timeout: {timeout}s)"
-        )
-
-        while time.time() - start_time < timeout:
-            # Check if vLLM process has died during startup
-            if self.vllm_process and self.vllm_process.poll() is not None:
-                vllm_logger.error(
-                    f"vLLM process died during startup with exit code "
-                    f"{self.vllm_process.returncode}"
-                )
-                raise RuntimeError(
-                    f"vLLM process died during startup with exit code "
-                    f"{self.vllm_process.returncode}"
-                )
-
-            try:
-                response = requests.get(health_url, timeout=5)
-                if response.status_code == 200:
-                    vllm_logger.info(f"vLLM server ready at {url}")
-                    return
-            except requests.exceptions.RequestException as e:
-                vllm_logger.debug(f"Health check failed: {e}")
-
-            time.sleep(2)
-
-        vllm_logger.error(f"vLLM server failed to start within {timeout} seconds")
-        raise RuntimeError(f"vLLM server failed to start within {timeout} seconds")
+        return status
 
     def _start_health_monitoring(
         self, health_url: str, check_interval: float = 1.0, max_failures: int = 3
@@ -1008,18 +921,22 @@ class BaseTrialController(TrialController):
 
             while not self._health_monitor_stop and not stop_event.is_set():
                 # Check if vLLM process itself has died
-                if self.vllm_process and self.vllm_process.poll() is not None:
+                if (
+                    self._vllm
+                    and self._vllm.process
+                    and self._vllm.process.poll() is not None
+                ):
                     self._health_check_failed = True
+                    code = self._vllm.process.returncode
                     self._health_check_failure_reason = (
-                        f"vLLM process died unexpectedly with exit code "
-                        f"{self.vllm_process.returncode}"
+                        f"vLLM process died unexpectedly with exit code {code}"
                     )
                     vllm_logger.error(
-                        f"Health monitoring detected process death: "
-                        f"exit code {self.vllm_process.returncode}"
+                        f"Health monitoring detected process death: exit code {code}"
                     )
                     # Terminate running benchmark immediately
-                    self.benchmark_provider.terminate_benchmark()
+                    if self.benchmark_provider:
+                        self.benchmark_provider.terminate_benchmark()
                     break
 
                 try:
@@ -1201,8 +1118,8 @@ class BaseTrialController(TrialController):
                 )
                 self._flush_logger_handlers(controller_logger)
 
-        if self.vllm_process:
-            pid = self.vllm_process.pid
+        if self._vllm:
+            pid = self._vllm.process.pid
             controller_logger.info(
                 f"Trial Controller: Cleaning up vLLM server process (PID: {pid})..."
             )
