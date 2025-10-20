@@ -17,6 +17,7 @@ from typing import Any, Callable, Optional
 
 import ray
 import requests
+from ray.exceptions import GetTimeoutError
 from typing_extensions import override
 
 from ..benchmarks import BenchmarkProvider, GuideLLMBenchmark
