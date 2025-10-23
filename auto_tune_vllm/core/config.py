@@ -560,7 +560,7 @@ class ConfigValidator:
         print(f"Auto-generated study name: {auto_name}")
         return auto_name, None, False
 
-    def _validate_config(self, raw_config: Dict[str, Any]) -> StudyConfig:
+    def _validate_config(self, raw_config: dict[str, dict[str, Any]]) -> StudyConfig:
         """Validate configuration against schema."""
         # Validate and build parameter configs
         validated_params = {}
@@ -748,57 +748,57 @@ class ConfigValidator:
             constraints=constraints,
         )
 
+    def _infer_parameter_type(self, parameter_config: dict[str, Any]):
+        range_check = ["max" in parameter_config, "min" in parameter_config]
+        list_check = "options" in parameter_config
+        if all(range_check):
+            if isinstance(parameter_config.get("max"), int) and isinstance(
+                parameter_config.get("min"), int
+            ):
+                return int
+            elif isinstance(parameter_config.get("max"), float) and isinstance(
+                parameter_config.get("min"), float
+            ):
+                return float
+            else:
+                raise ValueError("Range type has a mix of floats and ints in config")
+        elif list_check:
+            options = parameter_config.get("options")
+            if options == [True, False] or options == [False, True]:
+                return bool
+            return list
+
+        raise ValueError(f"Unable to parse parameter {parameter_config}")
+
     def _build_parameter_config(
-        self, name: str, user_config: Dict[str, Any], schema_def: Dict[str, Any]
+        self, name: str, user_config: dict[str, Any], schema_def: Dict[str, Any]
     ) -> ParameterConfig:
         """Build parameter config from user config, defaults, and schema."""
-        param_type = schema_def["type"]
-        description = schema_def.get("description")
+        try:
+            param_type = self._infer_parameter_type(user_config)
+        except ValueError as _:
+            raise ValueError(f"Unable to parse {name}: {user_config}")
 
-        base_config = {
+        base = {
             "name": name,
             "enabled": user_config.get("enabled", True),
-            "description": description,
         }
-
-        def get_value(key: str, schema_fallback=None, allow_defaults: bool = False):
-            """Get value with priority.
-
-            Priority: user_config > (defaults if allow_defaults) > schema
-            > schema_fallback.
-            Note: defaults are parameter values, not bounds; do NOT use for
-            min/max/step/options.
-            """
-            if key in user_config:
-                return user_config[key]
-            if allow_defaults and name in self.defaults:
-                return self.defaults[name]
-            if key in schema_def:
-                return schema_def[key]
-            return schema_fallback
-
-        if param_type == "range":
+        base.update(user_config)
+        if param_type is float or param_type is int:
+            # TODO: Independent RangeIntParamter and RangeFloatParameter types
             return RangeParameter(
-                **base_config,
-                min=get_value("min", schema_def["min"], allow_defaults=False),
-                max=get_value("max", schema_def["max"], allow_defaults=False),
-                step=get_value("step", schema_def.get("step"), allow_defaults=False),
-                data_type=schema_def["data_type"],
+                name=name,
+                min=user_config.get("min"),
+                max=user_config.get("max"),
+                step=base.get("step", None),
+                data_type=str(param_type),
             )
-        elif param_type == "list":
-            # Allow user to restrict schema options
-            schema_options = schema_def["options"]
-            user_options = user_config.get("options", schema_options)
-
-            # Validate user options are subset of schema options
-            invalid_options = set(user_options) - set(schema_options)
-            if invalid_options:
-                raise ValueError(f"Invalid options for {name}: {invalid_options}")
-
+        elif param_type is list:
             return ListParameter(
-                **base_config, options=user_options, data_type=schema_def["data_type"]
+                name=name,
+                options=user_config.get("options"),
             )
-        elif param_type == "boolean":
-            return BooleanParameter(**base_config)
+        elif param_type is bool:
+            return BooleanParameter(name=name)
         else:
             raise ValueError(f"Unknown parameter type: {param_type}")
