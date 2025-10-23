@@ -602,7 +602,10 @@ class StudyController:
 
             trial_config = self._build_trial_config(trial)
             # Increasing the timeout for vLLM startup
-            trial_config.vllm_startup_timeout = int(self.config.static_environment_variables.get("VLLM_STARTUP_TIMEOUT", 300))
+            trial_config.vllm_startup_timeout = int(
+                self.config.static_environment_variables.get(
+                    "VLLM_STARTUP_TIMEOUT", 300
+                    ))
 
             # Check constraints before submitting trial
             if len(self.config.constraints) > 0:
