@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, List, Optional, Union
+from typing import Any, List, Optional, Type, Union
 
 import optuna
 from pydantic import BaseModel, Field
@@ -22,15 +22,15 @@ class ParameterConfig(BaseModel, ABC):
 class RangeParameter(ParameterConfig):
     """Range-based parameter (continuous or discrete)."""
 
-    min_value: Union[int, float] = Field(alias="min")
-    max_value: Union[int, float] = Field(alias="max")
-    step: Optional[Union[int, float]] = None
-    data_type: str = "float"  # "int" or "float"
+    min_value: int | float = Field(alias="min")
+    max_value: int | float = Field(alias="max")
+    step: int | float | None = None
+    data_type: type[float | int] = float  # "int" or "float"
 
     @override
     def generate_optuna_suggest(self, trial: optuna.Trial) -> Union[int, float]:
         """Generate Optuna range suggestion."""
-        if self.data_type == "int":
+        if self.data_type is int:
             return trial.suggest_int(
                 self.name,
                 low=int(self.min_value),
