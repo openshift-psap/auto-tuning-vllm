@@ -567,7 +567,7 @@ class StudyController:
                     )
                 else:
                     logger.info("No active trials to cleanup.")
-                
+
                 self.backend.cleanup_all_trials()
                 logger.info("Trial cleanup completed successfully.")
             except Exception as cleanup_e:
@@ -605,7 +605,8 @@ class StudyController:
             trial_config.vllm_startup_timeout = int(
                 self.config.static_environment_variables.get(
                     "VLLM_STARTUP_TIMEOUT", 300
-                    ))
+                )
+            )
 
             # Check constraints before submitting trial
             if len(self.config.constraints) > 0:
