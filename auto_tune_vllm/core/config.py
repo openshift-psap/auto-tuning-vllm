@@ -611,19 +611,22 @@ class ConfigValidator:
     def _infer_parameter_type(self, parameter_config: dict[str, Any]):
         range_check = ["max" in parameter_config, "min" in parameter_config]
         list_check = "options" in parameter_config
-        if all(range_check):
-            if isinstance(parameter_config["max"], int) and isinstance(
-                parameter_config.get("min"), int
-            ):
-                return int
-            elif isinstance(parameter_config["max"], float) and isinstance(
-                parameter_config.get("min"), float
-            ):
+        if any(range_check):
+            min_value = parameter_config.get("min")
+            max_value = parameter_config.get("max")
+            min_is_numeric = isinstance(min_value, (int, float))
+            max_is_numeric = isinstance(max_value, (int, float))
+            if not min_is_numeric or not max_is_numeric:
+                raise TypeError("'min' and 'max' must be numbers (int or float)")
+            # check or clause incase users do (0, 1.0) as a range
+            if isinstance(max_value, float) or isinstance(min_value, float):
                 return float
             else:
-                raise ValueError("Range type has a mix of floats and ints in config")
+                return int
         elif list_check:
             options = parameter_config.get("options")
+            if not isinstance(options, list):
+                raise TypeError("'options' must be a list")
             if options == [True, False] or options == [False, True]:
                 return bool
             return list
@@ -639,25 +642,22 @@ class ConfigValidator:
         except ValueError as _:
             raise ValueError(f"Unable to parse {name}: {user_config}")
 
-        base = {
+        common = {
             "name": name,
             "enabled": user_config.get("enabled", True),
         }
-        base.update(user_config)
+        common.update(user_config)
         if param_type is float or param_type is int:
             # TODO: Separate out into RangeIntParamter and RangeFloatParameter types
             return RangeParameter(
                 name=name,
                 min=user_config.get("min"),
                 max=user_config.get("max"),
-                step=base.get("step", None),
+                step=common.get("step", None),
                 data_type=param_type,
             )
         elif param_type is list:
-            return ListParameter(
-                name=name,
-                options=user_config.get("options"),
-            )
+            return ListParameter(name=name, options=user_config.get("options"))
         elif param_type is bool:
             return BooleanParameter(name=name)
         else:
