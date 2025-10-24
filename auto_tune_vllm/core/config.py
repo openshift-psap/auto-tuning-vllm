@@ -298,11 +298,10 @@ class StudyConfig:
     def from_file(
         cls,
         config_path: str,
-        defaults_path: str | None = None,
         vllm_version: str | None = None,
     ) -> StudyConfig:
         """Load and validate configuration from YAML file."""
-        config_validator = ConfigValidator(defaults_path, vllm_version)
+        config_validator = ConfigValidator(vllm_version)
         return config_validator.load_and_validate(config_path)
 
 
@@ -311,66 +310,9 @@ class ConfigValidator:
 
     def __init__(
         self,
-        defaults_path: str | None = None,
         vllm_version: str | None = None,
     ):
-        """Initialize with parameter optional defaults."""
         self.vllm_version: str = vllm_version if vllm_version else "No Version Set"
-        # Load defaults - support versioned defaults
-        self.defaults: dict[str, Any] = {}
-        if defaults_path is not None:
-            self.defaults_path: Path = Path(defaults_path)
-            self.defaults = self._load_defaults()
-        elif vllm_version is not None:
-            self._load_version_defaults(vllm_version)
-        else:
-            self._load_latest_defaults()
-
-    def _load_defaults(self) -> dict[str, Any]:
-        """Load defaults from YAML file."""
-        if not self.defaults_path.exists():
-            raise FileNotFoundError(f"Defaults file not found: {self.defaults_path}")
-
-        with open(self.defaults_path) as f:
-            defaults_data = yaml.safe_load(f)
-
-        return self._flatten_defaults(defaults_data)
-
-    def _load_version_defaults(self, version: str):
-        """Load version-specific defaults."""
-        try:
-            from ..utils.version_manager import VLLMVersionManager
-
-            manager = VLLMVersionManager()
-            defaults_data = manager.load_defaults(version)
-            self.defaults = self._flatten_defaults(defaults_data)
-            self.defaults_path = manager.get_defaults_path(version)
-        except Exception as e:
-            print(f"Warning: Could not load vLLM defaults for version {version}: {e}")
-            self.defaults = {}
-            self.defaults_path = None
-
-    def _load_latest_defaults(self):
-        """Try to load the latest available defaults."""
-        try:
-            from ..utils.version_manager import VLLMVersionManager
-
-            manager = VLLMVersionManager()
-            defaults_data = manager.load_defaults()  # Load latest
-            self.defaults = self._flatten_defaults(defaults_data)
-            self.defaults_path = manager.get_defaults_path()
-        except Exception:
-            # No versioned defaults available, use empty defaults
-            self.defaults = {}
-            self.defaults_path = None
-
-    def _flatten_defaults(self, defaults_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Flatten the nested defaults structure for easy lookup."""
-        flat_defaults = {}
-        for _, section_defaults in defaults_data.get("defaults", {}).items():
-            for param_name, default_value in section_defaults.items():
-                flat_defaults[param_name] = default_value
-        return flat_defaults
 
     def load_and_validate(self, config_path: str) -> StudyConfig:
         """Load and validate study configuration with environment variable expansion."""
@@ -670,8 +612,6 @@ class ConfigValidator:
         range_check = ["max" in parameter_config, "min" in parameter_config]
         list_check = "options" in parameter_config
         if all(range_check):
-            print(f"{parameter_config['max']=}")
-            print(f"{isinstance(parameter_config['max'], int)=}")
             if isinstance(parameter_config["max"], int) and isinstance(
                 parameter_config.get("min"), int
             ):
@@ -693,7 +633,7 @@ class ConfigValidator:
     def _build_parameter_config(
         self, name: str, user_config: dict[str, Any]
     ) -> ParameterConfig:
-        """Build parameter config from user config, defaults, and schema."""
+        """Build parameter config from user config."""
         try:
             param_type = self._infer_parameter_type(user_config)
         except ValueError as _:

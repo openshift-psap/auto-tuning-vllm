@@ -164,16 +164,6 @@ def main():
 
         print(f"\n✨ Defaults file saved to: {output_path}")
 
-        if args.versioned:
-            print(
-                "   Also available as: auto_tune_vllm/schemas/vllm_defaults/latest.yaml"
-            )
-            print(
-                f"   Use with: StudyConfig.from_file(config_path, vllm_version='{vllm_version}')"  # noqa: E501
-            )
-        else:
-            print(f"   Use with: ConfigValidator(defaults_path='{output_path}')")
-
         # Show version management info if versioned
         if args.versioned:
             try:
