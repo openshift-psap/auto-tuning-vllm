@@ -518,7 +518,9 @@ class StudyController:
                         f"(attempt {final_cleanup_attempts}/"
                         f"{max_cleanup_attempts})"
                     )
-                    logger.debug(f"Active trial IDs: {list(self.active_trials.keys())}")
+                    logger.debug(f"Active trial IDs: {list\
+                        (self.active_trials.keys())}\n"
+                        f"Completed trials: {self.completed_trials}")
 
                 time.sleep(poll_interval)
 
