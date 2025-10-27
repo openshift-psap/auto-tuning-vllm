@@ -1044,6 +1044,7 @@ class StudyController:
         """Run baseline trials using pure vLLM defaults.
 
         Adds max-num-seqs when concurrency > 256.
+        Baseline trials are now added to the Optuna study and appear in dashboard.
         """
         logger.info("🔄 Running baseline trials...")
 
@@ -1061,11 +1062,32 @@ class StudyController:
             if concurrency > 256:
                 baseline_parameters["max_num_seqs"] = concurrency
 
+            # Enqueue baseline trial in Optuna study with fixed parameters
+            # This ensures it appears in the dashboard and visualizations
+            try:
+                self.study.enqueue_trial(baseline_parameters)
+                logger.debug(
+                    f"Enqueued baseline trial with parameters: {baseline_parameters}"
+                )
+            except Exception as e:
+                logger.error(f"Failed to enqueue baseline trial: {e}")
+                continue
+
+            # Get the trial object from Optuna (it will have the enqueued parameters)
+            trial = self.study.ask()
+
+            # Mark this trial as a baseline with user attributes
+            trial.set_user_attr("is_baseline", True)
+            trial.set_user_attr("baseline_concurrency", concurrency)
+
+            # Cache trial object for setting additional user attributes later
+            self.trial_objects[trial.number] = trial
+
             # Create special baseline trial configuration
             baseline_trial_config = TrialConfig(
                 study_name=self.config.study_name,
                 trial_id=f"baseline_concurrency_{concurrency}",
-                trial_number=None,  # No Optuna trial number for baselines
+                trial_number=trial.number,  # Use Optuna trial number
                 trial_type="baseline",
                 parameters=baseline_parameters,
                 parameter_configs=self.config.parameters,
@@ -1081,7 +1103,7 @@ class StudyController:
 
                 # Wait for baseline trial to complete using polling mechanism
                 logger.info(
-                    f"⏳ Waiting for baseline trial "
+                    f"⏳ Waiting for baseline trial #{trial.number} "
                     f"(concurrency={concurrency}) to complete..."
                 )
 
@@ -1099,8 +1121,12 @@ class StudyController:
                         # Trial completed
                         trial_result = completed_results[0]
                         logger.info(
-                            f"✅ Baseline trial (concurrency={concurrency}) completed:"
+                            f"✅ Baseline trial #{trial.number} (concurrency={concurrency}) completed:"
                         )
+
+                        # Set timing and error user attributes
+                        self._set_trial_user_attributes(trial.number, trial_result)
+
                         if trial_result.success and trial_result.objective_values:
                             logger.info(
                                 f"   Objectives: {trial_result.objective_values}"
@@ -1109,11 +1135,28 @@ class StudyController:
                             self.baseline_results[concurrency] = (
                                 trial_result.objective_values
                             )
+                            # Report to Optuna so it appears in dashboard
+                            self.study.tell(
+                                trial=trial.number,
+                                values=trial_result.objective_values,
+                                state=TrialState.COMPLETE,
+                            )
                         else:
                             logger.error(
                                 f"❌ Baseline trial failed: "
                                 f"{trial_result.error_message}"
                             )
+                            # Report failure to Optuna
+                            self.study.tell(
+                                trial=trial.number,
+                                values=None,
+                                state=TrialState.FAIL,
+                            )
+
+                        # Clean up trial object cache
+                        if trial.number in self.trial_objects:
+                            del self.trial_objects[trial.number]
+
                         break
                     else:
                         # Still running, wait and poll again
@@ -1121,14 +1164,32 @@ class StudyController:
                 else:
                     # Timeout reached
                     logger.error(
-                        f"❌ Baseline trial (concurrency={concurrency}) "
+                        f"❌ Baseline trial #{trial.number} (concurrency={concurrency}) "
                         f"timed out after {timeout_seconds} seconds"
                     )
+                    # Report timeout as failure to Optuna
+                    self.study.tell(
+                        trial=trial.number,
+                        values=None,
+                        state=TrialState.FAIL,
+                    )
+                    # Clean up trial object cache
+                    if trial.number in self.trial_objects:
+                        del self.trial_objects[trial.number]
 
             except Exception as e:
                 logger.error(
-                    f"❌ Baseline trial (concurrency={concurrency}) failed: {e}"
+                    f"❌ Baseline trial #{trial.number} (concurrency={concurrency}) failed: {e}"
                 )
+                # Report exception as failure to Optuna
+                self.study.tell(
+                    trial=trial.number,
+                    values=None,
+                    state=TrialState.FAIL,
+                )
+                # Clean up trial object cache
+                if trial.number in self.trial_objects:
+                    del self.trial_objects[trial.number]
                 # Continue with other concurrency levels
                 continue
 
