@@ -1,8 +1,8 @@
 """Benchmark configuration."""
 
 from dataclasses import dataclass
-from typing import Optional
-
+from logging import DEBUG
+from typing import Optional, Literal
 
 @dataclass
 class BenchmarkConfig:
@@ -30,7 +30,7 @@ class BenchmarkConfig:
     output_tokens_max: Optional[int] = None
 
     # Logging level for GuideLLM
-    logging_level: str = "INFO"
+    logging_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     
     @property
     def use_synthetic_data(self) -> bool:
