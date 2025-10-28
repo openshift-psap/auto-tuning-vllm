@@ -1,8 +1,7 @@
 """Benchmark configuration."""
 
 from dataclasses import dataclass
-from logging import DEBUG
-from typing import Optional, Literal
+from typing import Literal, Optional
 
 @dataclass
 class BenchmarkConfig:
