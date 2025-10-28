@@ -28,6 +28,9 @@ class BenchmarkConfig:
     output_tokens_stdev: Optional[int] = None
     output_tokens_min: Optional[int] = None
     output_tokens_max: Optional[int] = None
+
+    # Logging level for GuideLLM
+    logging_level: str = "INFO"
     
     @property
     def use_synthetic_data(self) -> bool:

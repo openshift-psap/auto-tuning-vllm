@@ -222,12 +222,21 @@ class GuideLLMBenchmark(BenchmarkProvider):
         self._logger.info(f"Results will be saved to: {self._results_file}")
         
         # Use Popen so we can terminate if vLLM dies
-        # start_new_session=True puts it in its own process group for clean termination
+        # start_new_session=True puts it in its own process group for clean
+        # termination
+        # Add debug logging to the process
+        env = os.environ.copy()
+        env["GUIDELLM__LOGGING__CONSOLE_LOG_LEVEL"] = config.logging_level
+        if config.logging_file:
+            raise NotImplementedError("Logging to file is not supported yet. "
+                                      "Please use console logging only.")
+
         self._process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=env,
             start_new_session=True
         )
         
