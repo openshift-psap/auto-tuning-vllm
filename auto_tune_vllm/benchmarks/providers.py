@@ -226,9 +226,6 @@ class GuideLLMBenchmark(BenchmarkProvider):
         # termination
         env = os.environ.copy()
         env["GUIDELLM__LOGGING__CONSOLE_LOG_LEVEL"] = config.logging_level
-        if config.logging_file:
-            raise NotImplementedError("Logging to file is not supported yet. "
-                                      "Please use console logging only.")
 
         self._process = subprocess.Popen(
             cmd,
