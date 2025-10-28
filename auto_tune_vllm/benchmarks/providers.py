@@ -224,7 +224,6 @@ class GuideLLMBenchmark(BenchmarkProvider):
         # Use Popen so we can terminate if vLLM dies
         # start_new_session=True puts it in its own process group for clean
         # termination
-        # Add debug logging to the process
         env = os.environ.copy()
         env["GUIDELLM__LOGGING__CONSOLE_LOG_LEVEL"] = config.logging_level
         if config.logging_file:
