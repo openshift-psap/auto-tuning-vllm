@@ -29,6 +29,7 @@ class BenchmarkConfig:
     output_tokens_min: Optional[int] = None
     output_tokens_max: Optional[int] = None
 
+    # Set in benchmark section of study config
     # Logging level for GuideLLM
     logging_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     
