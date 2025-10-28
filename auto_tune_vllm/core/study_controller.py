@@ -1072,7 +1072,9 @@ class StudyController:
         Baseline trials are now added to the Optuna study and appear in dashboard.
         """
         if not self.config.baseline or not self.config.baseline.enabled:
-            logger.warning("No baseline configuration found or disabled, skipping baseline trials")
+            logger.warning(
+                "No baseline configuration found or disabled, skipping baseline trials"
+            )
             return
         logger.info("🔄 Running baseline trials...")
 
