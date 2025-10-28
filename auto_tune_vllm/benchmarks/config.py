@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from typing import Literal, Optional
 
+
 @dataclass
 class BenchmarkConfig:
     """Configuration for benchmark execution."""
