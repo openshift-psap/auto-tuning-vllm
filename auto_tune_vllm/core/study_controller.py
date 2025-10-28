@@ -1099,8 +1099,9 @@ class StudyController:
                 )
             except Exception as e:
                 logger.error(f"Failed to enqueue baseline trial: {e}")
-                continue
+                continue  # Skip to next concurrency level - prevents study corruption
 
+            # IMPORTANT: Code below only runs if enqueue succeeded
             # Get the trial object from Optuna (it will have the enqueued parameters)
             trial = self.study.ask()
 
