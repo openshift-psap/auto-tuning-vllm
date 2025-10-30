@@ -5,7 +5,7 @@ from .trial_controller import TrialController
 
 __all__ = [
     "ExecutionBackend",
-    "RayExecutionBackend", 
+    "RayExecutionBackend",
     "LocalExecutionBackend",
     "TrialController",
 ]
