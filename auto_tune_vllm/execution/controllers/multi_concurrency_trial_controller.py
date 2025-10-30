@@ -9,18 +9,16 @@ import platform
 import subprocess
 import sys
 import time
-from abc import ABC, abstractmethod
 from enum import Enum, auto
 from typing import Any, Callable
 
 import ray
 from ray.exceptions import GetTimeoutError
-from typing_extensions import override
 
 from ...benchmarks.providers import BenchmarkProvider, GuideLLMBenchmark
 from ...core.trial import ExecutionInfo, TrialConfig, TrialResult
-from ...logging.manager import CentralizedLogger
 from ..vllmprocess import vLLMProcess
+from .trial_loggers import TrialLoggers
 from .utils import classify_error, validate_environment
 
 logger = logging.getLogger(__name__)
@@ -33,34 +31,15 @@ class TrialState(Enum):
     RUNNING_BENCHMARK = auto()
 
 
-class TrialController(ABC):
-    """Abstract base for trial execution controllers."""
-
-    @abstractmethod
-    def run_trial(self, trial_config: TrialConfig) -> TrialResult:
-        """Execute a single optimization trial."""
-        pass
-
-    @abstractmethod
-    def cleanup_resources(self):
-        """Clean up any resources (servers, processes, etc.)."""
-        pass
-
-    @abstractmethod
-    def request_cancellation(self):
-        """Request cancellation of the running trial (non-blocking)."""
-        pass
-
-
-class MultiConcurrencyTrialController(TrialController):
+class MultiConcurrencyTrialController:
     """Base implementation with common trial execution logic."""
 
     def __init__(self):
         self.vllm_server: vLLMProcess | None = None
         self.benchmark_provider: BenchmarkProvider | None = None
         self._environment_validated: bool = False
-        # Dict to hold trial-specific loggers
-        self.trial_loggers: dict[str, logging.Logger] = {}
+        # Trial-specific logger manager
+        self.loggers: TrialLoggers = TrialLoggers()
         self._benchmark_process = None  # Track running benchmark process
         # Flag for external cancellation requests
         self._cancellation_requested: bool = False
@@ -76,116 +55,25 @@ class MultiConcurrencyTrialController(TrialController):
         except Exception as error:
             raise error
 
-    def _setup_trial_logging(self, trial_config: TrialConfig):
-        """Setup trial-specific loggers based on logging configuration."""
-        if not trial_config.logging_config:
-            # No specific logging config, use default loggers
-            return
 
-        try:
-            # Initialize CentralizedLogger for this trial
-            log_database_url = trial_config.logging_config.get("database_url")
-            log_file_path = trial_config.logging_config.get("file_path")
-            log_level = trial_config.logging_config.get("log_level", "INFO")
-
-            if log_database_url or log_file_path:
-                centralized_logger = CentralizedLogger(
-                    study_name=trial_config.study_name,
-                    pg_url=log_database_url,
-                    file_path=log_file_path,
-                    log_level=log_level,
-                )
-
-                # Get trial-specific loggers for different components
-                self.trial_loggers["controller"] = centralized_logger.get_trial_logger(
-                    trial_config.trial_id, "controller"
-                )
-                self.trial_loggers["vllm"] = centralized_logger.get_trial_logger(
-                    trial_config.trial_id, "vllm"
-                )
-                self.trial_loggers["benchmark"] = centralized_logger.get_trial_logger(
-                    trial_config.trial_id, "benchmark"
-                )
-
-                # Log trial start
-                self.trial_loggers["controller"].info(
-                    f"Starting trial {trial_config.trial_id}"
-                )
-                self.trial_loggers["controller"].info(
-                    f"Parameters: {trial_config.parameters}"
-                )
-
-        except Exception as e:
-            # Fallback to default logger if setup fails
-            logger.warning(f"Failed to setup trial logging: {e}")
-
-    def _get_trial_logger(self, component: str) -> logging.Logger:
-        """
-        Get trial logger for specific component.
-        Fallback to default if not available.
-        """
-        return self.trial_loggers.get(component, logger)
-
-    def _flush_logger_handlers(self, target_logger: logging.Logger):
-        """
-        Immediately flush all handlers for a specific logger.
-        This ensures logs appear in real-time during critical operations like cleanup.
-        """
-        for handler in target_logger.handlers:
-            try:
-                handler.flush()
-            except Exception as e:
-                # Silently ignore flush errors to avoid breaking cleanup
-                logger.debug(f"Failed to flush handler: {e}")
-
-    def _flush_trial_logs(self, trial_id: str):
-        """Flush any buffered logs for the trial to ensure all records are written."""
-        try:
-            # Flush trial-specific loggers if we have them
-            for component_logger in self.trial_loggers.values():
-                for handler in component_logger.handlers:
-                    try:
-                        handler.flush()
-                    except Exception as e:
-                        logger.debug(f"Failed to flush handler: {e}")
-
-            # Also try to flush by logger name pattern (fallback)
-            import logging
-
-            study_name = getattr(self, "_current_study_name", None)
-            if study_name:
-                for component in ["controller", "vllm", "benchmark"]:
-                    logger_name = f"study_{study_name}.{trial_id}.{component}"
-                    trial_logger = logging.getLogger(logger_name)
-                    for handler in trial_logger.handlers:
-                        try:
-                            handler.flush()
-                        except Exception as e:
-                            logger.debug(
-                                f"Failed to flush handler for {logger_name}: {e}"
-                            )
-        except Exception as e:
-            logger.debug(f"Error flushing trial logs: {e}")
-
-    @override
     def request_cancellation(self):
         """Request cancellation of the running trial (non-blocking).
 
         This method can be called via Ray .remote() while run_trial is executing.
         It sets a flag that causes the trial to terminate gracefully.
         """
-        controller_logger = self.trial_loggers.get("controller", logger)
+        controller_logger = self.loggers.get_logger("controller")
         controller_logger.info(
             "!!! CANCELLATION REQUESTED - Terminating trial immediately !!!"
         )
-        self._flush_logger_handlers(controller_logger)
+        self.loggers.flush_handlers(controller_logger)
 
         self._cancellation_requested = True
 
         # Immediately terminate benchmark if running
         if self.benchmark_provider:
             controller_logger.info("Cancellation: Terminating benchmark process...")
-            self._flush_logger_handlers(controller_logger)
+            self.loggers.flush_handlers(controller_logger)
             try:
                 self.benchmark_provider.terminate_benchmark()
                 controller_logger.info("Cancellation: Benchmark terminated")
@@ -193,11 +81,12 @@ class MultiConcurrencyTrialController(TrialController):
                 controller_logger.warning(
                     f"Cancellation: Error terminating benchmark: {e}"
                 )
-            self._flush_logger_handlers(controller_logger)
+            self.loggers.flush_handlers(controller_logger)
 
-    @override
     def run_trial(
-        self, trial_config: TrialConfig, cancellation_flag_actor=None
+        self,
+        trial_config: TrialConfig,
+        cancellation_flag_actor=None,
     ) -> TrialResult:
         """Execute trial with proper error handling and cleanup.
 
@@ -207,7 +96,8 @@ class MultiConcurrencyTrialController(TrialController):
                                     Can be checked via .is_cancelled().remote()
         """
         execution_info = ExecutionInfo()
-        controller_logger = self._get_trial_logger("controller")
+        self.loggers.setup(trial_config)
+        controller_logger = self.loggers.get_logger("controller")
         controller_logger.info(
             f"Running trial {trial_config.trial_id} "
             f"with parameters: {trial_config.parameters}"
@@ -220,12 +110,11 @@ class MultiConcurrencyTrialController(TrialController):
                 "study_name": trial_config.study_name,
                 "trial_id": trial_config.trial_id,
             }
-            self._setup_trial_logging(trial_config)
             self._validate_environment(trial_config)
 
             self.benchmark_provider = self._create_benchmark_provider(trial_config)
 
-            def should_cancel():
+            def should_cancel() -> bool:
                 """Check if cancellation was requested.
 
                 Works with both Ray actor and local flag.
@@ -292,7 +181,7 @@ class MultiConcurrencyTrialController(TrialController):
 
                 # Start benchmark
                 execution_info.mark_benchmark_started()
-                benchmark_logger: logging.Logger = self._get_trial_logger("benchmark")
+                benchmark_logger: logging.Logger = self.loggers.get_logger("benchmark")
 
                 if hasattr(self.benchmark_provider, "set_logger"):
                     self.benchmark_provider.set_logger(benchmark_logger)
@@ -439,7 +328,7 @@ class MultiConcurrencyTrialController(TrialController):
             )
         finally:
             # Flush any buffered logs before cleanup
-            self._flush_trial_logs(trial_config.trial_id)
+            self.loggers.flush_all(trial_config.trial_id, self._current_study_name)
             self.cleanup_resources()
 
     def _create_benchmark_provider(
@@ -592,7 +481,7 @@ class MultiConcurrencyTrialController(TrialController):
             )
             controller_logger.info(f"Trial was in state: {state.name}")
             controller_logger.info(f"Detection occurred at iteration: {poll_count}")
-            self._flush_logger_handlers(controller_logger)
+            self.loggers.flush_handlers(controller_logger)
 
             # Cleanup based on current state
             if benchmark_process and benchmark_process.poll() is None:
@@ -701,18 +590,17 @@ class MultiConcurrencyTrialController(TrialController):
 
         return objective_values
 
-    @override
     def cleanup_resources(self):
         """Clean up vLLM server process and health monitoring."""
         # Use trial-specific logger if available, otherwise fall back to module logger
-        controller_logger = self._get_trial_logger("controller")
+        controller_logger = self.loggers.get_logger("controller")
 
         controller_logger.info(
             "!!! Trial Controller: Received cleanup request from backend !!!"
         )
 
         # IMMEDIATE FLUSH: Ensure user sees cleanup starting in real-time
-        self._flush_logger_handlers(controller_logger)
+        self.loggers.flush_handlers(controller_logger)
 
         # Terminate any running benchmark process
         if self.benchmark_provider:
@@ -720,30 +608,30 @@ class MultiConcurrencyTrialController(TrialController):
                 controller_logger.info(
                     "Trial Controller: Terminating benchmark process..."
                 )
-                self._flush_logger_handlers(controller_logger)
+                self.loggers.flush_handlers(controller_logger)
                 self.benchmark_provider.terminate_benchmark()
                 controller_logger.info("Trial Controller: Benchmark process terminated")
-                self._flush_logger_handlers(controller_logger)
+                self.loggers.flush_handlers(controller_logger)
             except Exception as e:
                 controller_logger.warning(
                     f"Trial Controller: Error terminating benchmark process: {e}"
                 )
-                self._flush_logger_handlers(controller_logger)
+                self.loggers.flush_handlers(controller_logger)
 
         # Stop vLLM server
         if self.vllm_server:
             controller_logger.info("Trial Controller: Stopping vLLM server...")
-            self._flush_logger_handlers(controller_logger)
+            self.loggers.flush_handlers(controller_logger)
             self.vllm_server.stop(timeout=10)
             self.vllm_server = None
             controller_logger.info("Trial Controller: vLLM server stopped")
-            self._flush_logger_handlers(controller_logger)
+            self.loggers.flush_handlers(controller_logger)
         else:
             controller_logger.debug("Trial Controller: No vLLM server to cleanup")
 
         # Flush all trial logs to ensure cleanup messages are written
         controller_logger.info("Trial Controller: Cleanup complete, flushing logs...")
-        for component_logger in self.trial_loggers.values():
+        for component_logger in self.loggers.trial_loggers.values():
             for handler in component_logger.handlers:
                 try:
                     handler.flush()
@@ -751,35 +639,3 @@ class MultiConcurrencyTrialController(TrialController):
                     # Use module logger as fallback since trial logger might be affected
                     logger.debug(f"Failed to flush handler during cleanup: {e}")
         controller_logger.info("Trial Controller: Log flush complete")
-
-    @abstractmethod
-    def _get_worker_id(self) -> str:
-        """Get worker identifier (Ray node ID or local machine info)."""
-        pass
-
-
-class RayWorkerMultiConcurrencyTrialController(MultiConcurrencyTrialController):
-    """Ray worker node trial controller with Ray-specific functionality."""
-
-    def _get_worker_id(self) -> str:
-        """Get Ray worker node ID."""
-        try:
-            return ray.get_runtime_context().get_node_id()
-        except Exception:
-            return "ray_worker_unknown"
-
-
-# Ray remote actor wrapper
-@ray.remote
-class RayMultiConcurrencyTrialActor(RayWorkerMultiConcurrencyTrialController):
-    """Ray remote actor for distributed trial execution."""
-
-    def run_trial(
-        self, trial_config: TrialConfig, cancellation_flag_actor=None
-    ) -> TrialResult:
-        """Run trial on Ray worker with optional cancellation flag actor."""
-        return super().run_trial(trial_config, cancellation_flag_actor)
-
-    def __del__(self):
-        """Ensure cleanup on actor destruction."""
-        self.cleanup_resources()
