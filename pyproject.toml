@@ -81,3 +81,7 @@ pythonVersion = "3.10"
 typeCheckingMode = "recommended"
 reportUnusedVariable = true
 reportUnusedImport = true
+reportUnusedCallResult = false
+reportImplicitStringConcatenation = false
+reportAny = false
+reportExplicitAny = false
