@@ -27,8 +27,8 @@ class BenchmarkProvider(ABC):
         self._process_pid = None  # Store PID for cleanup even if process handle is gone
         self._process_pgid = None  # Store process group ID for cleanup
         self._cancellation_flag = None  # Function to check for cancellation
-    
-    def set_logger(self, custom_logger):
+
+    def set_logger(self, custom_logger: logging.Logger):
         """Set a custom logger for this benchmark provider."""
         self._logger = custom_logger
 
@@ -38,7 +38,7 @@ class BenchmarkProvider(ABC):
             'study_name': study_name,
             'trial_id': trial_id
         }
-    
+
     def terminate_benchmark(self):
         """Terminate the running benchmark process and its process group if active."""
         # Try to use stored PID/PGID first, in case process handle is gone
@@ -46,16 +46,16 @@ class BenchmarkProvider(ABC):
         if pid is None:  # first check, if PID is still none after this we will return
             pid = self._process.pid if self._process else None
         pgid = self._process_pgid
-        
+
         if pid is None:
             self._logger.debug("Benchmark: No benchmark process to terminate")
             return
-            
+
         self._logger.info(
             f"Benchmark: Terminating benchmark process {pid} "
             f"and its process group..."
         )
-        
+
         # Try to get process group ID if we don't have it
         if pgid is None:
             try:
@@ -65,7 +65,7 @@ class BenchmarkProvider(ABC):
                 self._logger.debug(
                     f"Benchmark: Process {pid} already gone or no process group"
                 )
-        
+
         # Try graceful shutdown with SIGTERM first
         try:
             if pgid is not None:
@@ -83,7 +83,7 @@ class BenchmarkProvider(ABC):
             self._process_pid = None
             self._process_pgid = None
             return
-        
+
         # Wait for graceful shutdown
         # (use a shorter timeout if process handle unavailable)
         wait_timeout = 5 if self._process else 2
@@ -103,7 +103,7 @@ class BenchmarkProvider(ABC):
                 else:
                     # Timeout - process still exists
                     raise subprocess.TimeoutExpired(None, wait_timeout)
-                    
+
             self._logger.info(
                 f"Benchmark: ✓ Process {pid} terminated gracefully via SIGTERM"
             )
@@ -112,7 +112,7 @@ class BenchmarkProvider(ABC):
                 f"Benchmark: Process {pid} did not terminate within {wait_timeout}s. "
                 f"Escalating to SIGKILL..."
             )
-            
+
             # Force kill with SIGKILL
             try:
                 if pgid is not None:
@@ -140,7 +140,7 @@ class BenchmarkProvider(ABC):
     @abstractmethod
     def start_benchmark(
         self, model_url: str, config: BenchmarkConfig
-    ) -> subprocess.Popen:
+    ) -> subprocess.Popen[str]:
         """
         Start benchmark subprocess (non-blocking).
 
@@ -190,7 +190,7 @@ class GuideLLMBenchmark(BenchmarkProvider):
     ) -> subprocess.Popen:
         """
         Start GuideLLM benchmark subprocess (non-blocking).
-        
+
         Returns:
             Popen process handle for polling by caller
         """
@@ -201,7 +201,7 @@ class GuideLLMBenchmark(BenchmarkProvider):
 
         # Build GuideLLM command
         cmd = self._build_guidellm_command(model_url, config, self._results_file)
-        
+
         # Validate binary and basic inputs
         import shutil
 
@@ -220,7 +220,7 @@ class GuideLLMBenchmark(BenchmarkProvider):
         # Run GuideLLM
         self._logger.info(f"Running: {' '.join(cmd)}")
         self._logger.info(f"Results will be saved to: {self._results_file}")
-        
+
         # Use Popen so we can terminate if vLLM dies
         # start_new_session=True puts it in its own process group for clean
         # termination
@@ -235,7 +235,7 @@ class GuideLLMBenchmark(BenchmarkProvider):
             env=env,
             start_new_session=True
         )
-        
+
         # Store PID and PGID immediately for cleanup, even if process handle is lost
         self._process_pid = self._process.pid
         try:
@@ -250,21 +250,21 @@ class GuideLLMBenchmark(BenchmarkProvider):
                 f"{self._process_pid}"
             )
             self._process_pgid = None
-        
+
         return self._process
 
     def parse_results(self) -> Dict[str, Any]:
         """
         Parse GuideLLM benchmark results from output file.
-        
+
         Returns:
             Dictionary with benchmark metrics
         """
         results_file = self._results_file
-        
+
         if not os.path.exists(results_file):
             raise RuntimeError(f"GuideLLM results file not found: {results_file}")
-        
+
         try:
             with open(results_file) as f:
                 data = json.load(f)
@@ -466,7 +466,7 @@ class CustomBenchmarkTemplate(BenchmarkProvider):
 
         Override this method to start your custom benchmark subprocess.
         Should return a Popen process handle for the caller to poll.
-        
+
         Example:
             cmd = ["your-benchmark-tool", "--url", model_url, ...]
             self._process = subprocess.Popen(
@@ -489,7 +489,7 @@ class CustomBenchmarkTemplate(BenchmarkProvider):
         Override this method to parse your benchmark output file.
         The returned dictionary should contain metrics that will be used
         to compute objective values for Optuna optimization.
-        
+
         Example:
             with open(self._results_file) as f:
                 data = json.load(f)
