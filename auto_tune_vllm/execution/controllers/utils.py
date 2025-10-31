@@ -93,40 +93,40 @@ def validate_environment(trial_config: TrialConfig) -> bool:
             f"Ensure all dependencies are properly installed and available in PATH."
         )
 
-    # Check GPU availability using Ray cluster resources
-    try:
-        if ray.is_initialized():
-            cluster_resources = ray.cluster_resources()
-            available_resources = ray.available_resources()
-
-            gpu_count = cluster_resources.get("GPU", 0)
-            available_gpus = available_resources.get("GPU", 0)
-
-            if gpu_count > 0:
-                logger.info(
-                    f"Ray cluster has {gpu_count} GPU(s) total, "
-                    f"{available_gpus} available"
-                )
-
-                # Log accelerator types if available
-                accelerator_types: list[str] = [
-                    k
-                    for k in cluster_resources.keys()
-                    if k.startswith("accelerator_type:")
-                ]
-                if accelerator_types:
-                    for acc_type in accelerator_types:
-                        acc_name = acc_type.replace("accelerator_type:", "")
-                        acc_count = cluster_resources[acc_type]
-                        logger.info(f"GPU type: {acc_name} (count: {acc_count})")
-            else:
-                logger.warning(
-                    "No GPUs detected in Ray cluster. vLLM may fail to start."
-                )
-        else:
-            logger.warning("Ray not initialized. Cannot check GPU availability.")
-    except Exception as e:
-        logger.warning(f"Could not check GPU availability from Ray: {e}")
-    logger.info("Environment validation passed on Ray worker")
+    # # Check GPU availability using Ray cluster resources
+    # try:
+    #     if ray.is_initialized():
+    #         cluster_resources = ray.cluster_resources()
+    #         available_resources = ray.available_resources()
+    #
+    #         gpu_count = cluster_resources.get("GPU", 0)
+    #         available_gpus = available_resources.get("GPU", 0)
+    #
+    #         if gpu_count > 0:
+    #             logger.info(
+    #                 f"Ray cluster has {gpu_count} GPU(s) total, "
+    #                 f"{available_gpus} available"
+    #             )
+    #
+    #             # Log accelerator types if available
+    #             accelerator_types: list[str] = [
+    #                 k
+    #                 for k in cluster_resources.keys()
+    #                 if k.startswith("accelerator_type:")
+    #             ]
+    #             if accelerator_types:
+    #                 for acc_type in accelerator_types:
+    #                     acc_name = acc_type.replace("accelerator_type:", "")
+    #                     acc_count = cluster_resources[acc_type]
+    #                     logger.info(f"GPU type: {acc_name} (count: {acc_count})")
+    #         else:
+    #             logger.warning(
+    #                 "No GPUs detected in Ray cluster. vLLM may fail to start."
+    #             )
+    #     else:
+    #         logger.warning("Ray not initialized. Cannot check GPU availability.")
+    # except Exception as e:
+    #     logger.warning(f"Could not check GPU availability from Ray: {e}")
+    # logger.info("Environment validation passed on Ray worker")
 
     return True

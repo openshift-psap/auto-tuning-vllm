@@ -20,8 +20,11 @@ logger = logging.getLogger(__name__)
 class BenchmarkProvider(ABC):
     """Abstract benchmark provider interface."""
 
-    def __init__(self):
-        self._logger = logger  # Default to module logger
+    def __init__(self, *, custom_logger: logging.Logger | None = None):
+        # Default to module logger
+        self._logger: logging.Logger = (
+            custom_logger if custom_logger is not None else logger
+        )
         self._trial_context = None  # Store trial context for file paths
         self._process = None  # Track running benchmark process for termination
         self._process_pid = None  # Store PID for cleanup even if process handle is gone
@@ -34,10 +37,7 @@ class BenchmarkProvider(ABC):
 
     def set_trial_context(self, study_name: str, trial_id: str):
         """Set trial context for benchmark result storage."""
-        self._trial_context = {
-            'study_name': study_name,
-            'trial_id': trial_id
-        }
+        self._trial_context = {"study_name": study_name, "trial_id": trial_id}
 
     def terminate_benchmark(self):
         """Terminate the running benchmark process and its process group if active."""
@@ -52,8 +52,7 @@ class BenchmarkProvider(ABC):
             return
 
         self._logger.info(
-            f"Benchmark: Terminating benchmark process {pid} "
-            f"and its process group..."
+            f"Benchmark: Terminating benchmark process {pid} and its process group..."
         )
 
         # Try to get process group ID if we don't have it
@@ -93,6 +92,7 @@ class BenchmarkProvider(ABC):
             else:
                 # Wait by polling if no process handle
                 import time
+
                 for _ in range(int(wait_timeout * 10)):
                     try:
                         os.kill(pid, 0)  # Check if process exists
@@ -210,12 +210,8 @@ class GuideLLMBenchmark(BenchmarkProvider):
                 "GuideLLM CLI not found on PATH. "
                 "Please install or provide the full path."
             )
-        if not (
-            model_url.startswith("http://") or model_url.startswith("https://")
-        ):
-            raise ValueError(
-                f"Invalid model_url: {model_url!r} (expected http/https)"
-            )
+        if not (model_url.startswith("http://") or model_url.startswith("https://")):
+            raise ValueError(f"Invalid model_url: {model_url!r} (expected http/https)")
 
         # Run GuideLLM
         self._logger.info(f"Running: {' '.join(cmd)}")
@@ -233,7 +229,7 @@ class GuideLLMBenchmark(BenchmarkProvider):
             stderr=subprocess.PIPE,
             text=True,
             env=env,
-            start_new_session=True
+            start_new_session=True,
         )
 
         # Store PID and PGID immediately for cleanup, even if process handle is lost
@@ -246,8 +242,7 @@ class GuideLLMBenchmark(BenchmarkProvider):
             )
         except (OSError, ProcessLookupError):
             self._logger.warning(
-                f"Failed to get process group for GuideLLM process "
-                f"{self._process_pid}"
+                f"Failed to get process group for GuideLLM process {self._process_pid}"
             )
             self._process_pgid = None
 
@@ -337,7 +332,7 @@ class GuideLLMBenchmark(BenchmarkProvider):
             "--output-path",
             results_file,
             "--processor-args",
-            '{"trust-remote-code":"true"}'
+            '{"trust-remote-code":"true"}',
         ]
 
         # Add dataset or synthetic data configuration
@@ -346,7 +341,7 @@ class GuideLLMBenchmark(BenchmarkProvider):
             data_config = {
                 "prompt_tokens": config.prompt_tokens,
                 "output_tokens": config.output_tokens,
-                "samples": config.samples
+                "samples": config.samples,
             }
 
             # Only add statistical distribution parameters if they were explicitly
@@ -516,4 +511,3 @@ BENCHMARK_PROVIDERS = {
     "guidellm": GuideLLMBenchmark,
     "custom_template": CustomBenchmarkTemplate,
 }
-

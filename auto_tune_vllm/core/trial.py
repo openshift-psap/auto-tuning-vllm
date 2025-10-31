@@ -44,7 +44,7 @@ class TrialConfig:
 
     study_name: str
     trial_id: str  # "trial_123" | "baseline_concurrency_50" | "probe_warmup_1"
-    trial_number: Optional[int] = None  # Only for Optuna trials (for study.tell())
+    trial_number: int  # Only for Optuna trials (for study.tell())
     trial_type: str = "optimization"  # "baseline" | "optimization" | "probe"
     parameters: Dict[str, Any] = field(
         default_factory=dict
@@ -187,20 +187,37 @@ class TrialResult:
     """Results from a completed trial."""
 
     trial_id: str  # Replace trial_number with composite identifier
-    trial_number: Optional[int] = None  # Keep for Optuna compatibility
+    trial_number: int | None = None  # Keep for Optuna compatibility
     trial_type: str = "optimization"
-    objective_values: List[float] = field(
+    objective_values: list[float] = field(
         default_factory=list
     )  # For Optuna (throughput, latency, etc.)
-    detailed_metrics: Dict[str, Any] = field(
+    detailed_metrics: dict[str, Any] = field(
         default_factory=dict
     )  # Rich percentile data from benchmarks
-    execution_info: ExecutionInfo = None
+    execution_info: ExecutionInfo | None = None
     success: bool = True
-    error_message: Optional[str] = None
-    error_type: Optional[str] = None
+    error_message: str | None = None
+    error_type: str | None = None
 
     @property
     def primary_objective(self) -> float:
         """Get primary objective value for single-objective optimization."""
         return self.objective_values[0] if self.objective_values else 0.0
+
+
+@dataclass(frozen=True)
+class MultiConccurencyTrialResult:
+    """Results from a completed trial."""
+
+    trial_id: str  # Replace trial_number with composite identifier
+    trial_number: int
+    concurrencies: list[int]
+    # For Optuna (throughput, latency, etc.)
+    objective_values: dict[int, list[float]] = field(default_factory=dict)
+    # Rich percentile data from benchmarks
+    detailed_metrics: dict[int, dict[str, float | int]] = field(default_factory=dict)
+    execution_info: ExecutionInfo | None = None
+    success: bool = False
+    error_message: str | None = None
+    error_type: str | None = None
