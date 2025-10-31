@@ -89,7 +89,7 @@ class MultiConcurrencyTrial:
 
         return {}
 
-    def run(
+    def run_trial(
         self,
         trial_config: TrialConfig,
     ) -> MultiConccurencyTrialResult:

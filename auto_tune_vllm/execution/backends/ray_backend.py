@@ -2,80 +2,20 @@
 
 from __future__ import annotations
 
-import concurrent.futures
 import logging
 import shutil
 import subprocess
 import sys
 import time
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import ray
 
-from ..core.trial import TrialConfig, TrialResult
+from ...core.trial import TrialConfig, TrialResult
+from .base import CancellationFlag, ExecutionBackend, JobHandle
 
 logger = logging.getLogger(__name__)
-
-
-# Simple Ray actor to hold cancellation state that can be modified externally
-
-@ray.remote
-class CancellationFlag:
-    """Lightweight Ray actor to hold mutable cancellation state."""
-
-    def __init__(self):
-        self.cancelled: bool = False
-
-    def request_cancellation(self):
-        """Set cancellation flag to True."""
-        self.cancelled = True
-        return True
-
-    def is_cancelled(self) -> bool:
-        """Check if cancellation was requested."""
-        return self.cancelled
-
-@dataclass
-class JobHandle:
-    """Handle for submitted trial job."""
-
-    trial_id: str
-    backend_job_id: str  # Ray ObjectRef ID, process PID, etc.
-    status: str = "running"  # "running", "completed", "failed"
-    submitted_at: float = 0.0
-
-    def __post_init__(self):
-        if self.submitted_at == 0.0:
-            self.submitted_at = time.time()
-
-
-class ExecutionBackend(ABC):
-    """Abstract execution backend - supports Ray or local execution."""
-
-    @abstractmethod
-    def submit_trial(self, trial_config: TrialConfig) -> JobHandle:
-        """Submit a trial for execution."""
-        pass
-
-    @abstractmethod
-    def poll_trials(
-        self, job_handles: List[JobHandle]
-    ) -> Tuple[List[TrialResult], List[JobHandle]]:
-        """Poll for completed trials, return completed results and remaining handles."""
-        pass
-
-    @abstractmethod
-    def shutdown(self):
-        """Clean shutdown of backend resources."""
-        pass
-
-    @abstractmethod
-    def cleanup_all_trials(self):
-        """Force cleanup of all active trials and their resources (vLLM processes)."""
-        pass
 
 
 class RayExecutionBackend(ExecutionBackend):
@@ -306,9 +246,7 @@ class RayExecutionBackend(ExecutionBackend):
             return [], job_handles
 
         # Check which trials are ready (non-blocking)
-        ready_refs, _ = ray.wait(
-            active_refs, num_returns=len(active_refs), timeout=0
-        )
+        ready_refs, _ = ray.wait(active_refs, num_returns=len(active_refs), timeout=0)
 
         completed_results = []
         remaining_handles = []
@@ -393,8 +331,7 @@ class RayExecutionBackend(ExecutionBackend):
                 logger.info(f"✓ {len(ready_refs)} {description} completed")
             if remaining_refs:
                 logger.warning(
-                    f"⚠ {len(remaining_refs)} {description} timed out "
-                    f"after {timeout}s"
+                    f"⚠ {len(remaining_refs)} {description} timed out after {timeout}s"
                 )
 
             return len(ready_refs), len(remaining_refs)
@@ -457,8 +394,7 @@ class RayExecutionBackend(ExecutionBackend):
             self.active_actors, "cleanup_resources", "Sent cleanup request"
         )
         logger.info(
-            f"Waiting up to {self.GRACEFUL_CLEANUP_TIMEOUT}s "
-            f"for graceful cleanup..."
+            f"Waiting up to {self.GRACEFUL_CLEANUP_TIMEOUT}s for graceful cleanup..."
         )
         self._wait_for_refs(
             cleanup_futures, self.GRACEFUL_CLEANUP_TIMEOUT, "actor cleanups"
@@ -467,8 +403,7 @@ class RayExecutionBackend(ExecutionBackend):
         # Phase 4: Force kill unresponsive actors
         if self.active_actors:
             logger.warning(
-                f"Force killing {len(self.active_actors)} "
-                f"unresponsive actor(s)..."
+                f"Force killing {len(self.active_actors)} unresponsive actor(s)..."
             )
             for job_id, actor in list(self.active_actors.items()):
                 try:
@@ -510,81 +445,3 @@ class RayExecutionBackend(ExecutionBackend):
                     subprocess.run(["pkill", "-f", "ray::"], timeout=5)
                 except Exception:
                     logger.error("Force stop also failed")
-
-
-class LocalExecutionBackend(ExecutionBackend):
-    """Local execution backend using thread/process pool."""
-
-    def __init__(self, max_concurrent: int = 1):
-        self.max_concurrent = max_concurrent
-        self.executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=max_concurrent
-        )
-        self.active_futures: Dict[str, concurrent.futures.Future] = {}
-
-    def submit_trial(self, trial_config: TrialConfig) -> JobHandle:
-        """Submit trial for local execution."""
-        from .trial_controller import LocalTrialController
-
-        # Create controller and submit to executor
-        controller = LocalTrialController()
-
-        future = self.executor.submit(controller.run_trial, trial_config)
-
-        job_id = str(id(future))  # Use future object ID as job ID
-        self.active_futures[job_id] = future
-
-        logger.info(f"Submitted trial {trial_config.trial_id} for local execution")
-        return JobHandle(trial_config.trial_id, job_id)
-
-    def poll_trials(
-        self, job_handles: List[JobHandle]
-    ) -> Tuple[List[TrialResult], List[JobHandle]]:
-        """Poll for completed local trials."""
-        if not job_handles:
-            return [], []
-
-        completed_results = []
-        remaining_handles = []
-
-        for handle in job_handles:
-            future = self.active_futures.get(handle.backend_job_id)
-
-            if future and future.done():
-                try:
-                    result = future.result()
-                    completed_results.append(result)
-                    logger.info(f"Completed local trial {handle.trial_id}")
-                    # Remove from active futures
-                    del self.active_futures[handle.backend_job_id]
-                except Exception as e:
-                    # Trial failed - create error result
-                    from ..core.trial import ExecutionInfo, TrialResult
-
-                    error_result = TrialResult(
-                        trial_id=handle.trial_id,
-                        objective_values=[],
-                        detailed_metrics={},
-                        execution_info=ExecutionInfo(),
-                        success=False,
-                        error_message=str(e),
-                    )
-                    completed_results.append(error_result)
-                    logger.error(f"Local trial {handle.trial_id} failed: {e}")
-                    # Remove from active futures
-                    del self.active_futures[handle.backend_job_id]
-            else:
-                remaining_handles.append(handle)
-
-        return completed_results, remaining_handles
-
-    def cleanup_all_trials(self):
-        """Cleanup all active trials (stub implementation for local backend)."""
-        logger.info("Local backend does not require explicit trial cleanup")
-        # Local backend doesn't need to do anything special here
-        # Individual trial controllers handle their own cleanup when they complete
-
-    def shutdown(self):
-        """Shutdown thread pool executor."""
-        self.executor.shutdown(wait=True)
-        logger.info("Shutdown local execution backend")
