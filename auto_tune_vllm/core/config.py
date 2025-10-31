@@ -78,7 +78,7 @@ class OptimizationConfig:
 
     # New structured format fields
     approach: Optional[str] = None  # "single_objective" or "multi_objective"
-    objectives: Optional[List[ObjectiveConfig]] = None  # For multi-objective
+    objectives: List[ObjectiveConfig] | None = None  # For multi-objective
     preset: Optional[str] = None  # "high_throughput", "low_latency", "balanced"
 
     def __post_init__(self):
