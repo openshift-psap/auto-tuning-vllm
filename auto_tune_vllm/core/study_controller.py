@@ -735,10 +735,12 @@ class StudyController:
             True if these parameters match a failed trial, False otherwise
         """
         # Get failed trials (with caching for better performance)
+        # Exclude baseline trials from duplicate check
         failed_trials = [
             trial
             for trial in self.study.trials
             if trial.state in (TrialState.FAIL, TrialState.PRUNED)
+            and not trial.user_attrs.get("is_baseline", False)
         ]
 
         for past_trial in failed_trials:
@@ -1173,6 +1175,8 @@ class StudyController:
                                 values=trial_result.objective_values,
                                 state=TrialState.COMPLETE,
                             )
+                            # Count baseline trial as completed
+                            self.completed_trials += 1
                         else:
                             logger.error(
                                 f"❌ Baseline trial failed: "
@@ -1184,6 +1188,8 @@ class StudyController:
                                 values=None,
                                 state=TrialState.FAIL,
                             )
+                            # Count baseline trial as completed (even if failed)
+                            self.completed_trials += 1
 
                         # Clean up trial object cache
                         if trial.number in self.trial_objects:
@@ -1206,6 +1212,8 @@ class StudyController:
                         values=None,
                         state=TrialState.FAIL,
                     )
+                    # Count baseline trial as completed (even if timed out)
+                    self.completed_trials += 1
                     # Clean up trial object cache
                     if trial.number in self.trial_objects:
                         del self.trial_objects[trial.number]
@@ -1221,6 +1229,8 @@ class StudyController:
                     values=None,
                     state=TrialState.FAIL,
                 )
+                # Count baseline trial as completed (even if excepted)
+                self.completed_trials += 1
                 # Clean up trial object cache
                 if trial.number in self.trial_objects:
                     del self.trial_objects[trial.number]
