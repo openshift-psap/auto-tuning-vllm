@@ -1,11 +1,18 @@
+import enum
 import logging
 import shutil
-
-import ray
 
 from ...core.trial import TrialConfig
 
 logger = logging.getLogger(__name__)
+
+
+class TrialState(enum.Enum):
+    """States for trial execution state machine."""
+
+    WAITING_FOR_VLLM = enum.auto()
+    RUNNING_BENCHMARK = enum.auto()
+
 
 # Error classification patterns for database storage
 # Maps error types to keyword patterns used by _classify_error()
@@ -23,6 +30,7 @@ ERROR_PATTERNS: dict[str, list[str]] = {
     "Benchmark_Error": ["benchmark", "guidellm"],
 }
 
+
 def classify_error(exception: Exception) -> str:
     """Classify error type based on exception message.
 
@@ -39,6 +47,7 @@ def classify_error(exception: Exception) -> str:
             return error_type
 
     return "Unknown"
+
 
 def validate_environment(trial_config: TrialConfig) -> bool:
     """Validate that all required packages are available on this worker."""

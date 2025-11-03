@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import logging
 import time
-from enum import Enum, auto
 from typing import Any
 
 from auto_tune_vllm.core.config import OptimizationConfig
@@ -23,13 +22,6 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CONCURRENCY_LIST = [4, 8, 16, 32, 64]
 POLL_INTERVAL = 1
-
-
-class TrialState(Enum):
-    """States for trial execution state machine."""
-
-    WAITING_FOR_VLLM = auto()
-    RUNNING_BENCHMARK = auto()
 
 
 class MultiConcurrencyTrial:
@@ -171,6 +163,7 @@ class MultiConcurrencyTrial:
             throughput = benchmark_result.get("output_tokens_per_second", 0.0)
             return [throughput]
 
+        # objective_values: list[float] = []
         objective_values: list[float] = []
         for idx in range(len(optimization_config.objectives)):
             metric_key = optimization_config.get_metric_key(idx)

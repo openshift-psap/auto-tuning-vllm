@@ -8,7 +8,6 @@ import signal
 import subprocess
 import time
 from abc import ABC, abstractmethod
-from enum import Enum, auto
 from typing import Optional
 
 import ray
@@ -17,15 +16,9 @@ from ray.exceptions import GetTimeoutError
 from ...benchmarks.providers import BenchmarkProvider, GuideLLMBenchmark
 from ...core.trial import ExecutionInfo, TrialConfig, TrialResult
 from ...logging.manager import CentralizedLogger
+from .utils import TrialState
 
 logger = logging.getLogger(__name__)
-
-
-class TrialState(Enum):
-    """States for trial execution state machine."""
-
-    WAITING_FOR_VLLM = auto()
-    RUNNING_BENCHMARK = auto()
 
 
 class TrialController(ABC):
