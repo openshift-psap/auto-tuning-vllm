@@ -7,6 +7,7 @@ import logging
 from typing import Dict, List, Tuple
 
 from ...core.trial import TrialConfig, TrialResult
+from ..controllers.trial_controller import LocalTrialController
 from .base import ExecutionBackend, JobHandle
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,6 @@ class LocalExecutionBackend(ExecutionBackend):
 
     def submit_trial(self, trial_config: TrialConfig) -> JobHandle:
         """Submit trial for local execution."""
-        from .trial_controller import LocalTrialController
 
         # Create controller and submit to executor
         controller = LocalTrialController()

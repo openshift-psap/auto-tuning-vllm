@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Tuple
 import ray
 
 from ...core.trial import TrialConfig, TrialResult
+from ..controllers.trial_controller import RayTrialActor
 from .base import CancellationFlag, ExecutionBackend, JobHandle
 
 logger = logging.getLogger(__name__)
@@ -179,7 +180,6 @@ class RayExecutionBackend(ExecutionBackend):
 
     def submit_trial(self, trial_config: TrialConfig) -> JobHandle:
         """Submit trial to Ray cluster."""
-        from .trial_controller import RayTrialActor
 
         # Create a lightweight cancellation flag actor (separate from trial actor)
         # This can be called even while the trial actor is busy
