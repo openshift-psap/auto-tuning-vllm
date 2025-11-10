@@ -853,7 +853,6 @@ class BaseTrialController(TrialController):
             str(port),
             "--host",
             "0.0.0.0",
-            "--no-enable-prefix-caching",
         ]
 
         # Add trial-specific parameters

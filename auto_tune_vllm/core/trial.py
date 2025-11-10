@@ -89,6 +89,10 @@ class TrialConfig:
             if isinstance(value, bool):
                 if value:
                     args.append(f"--{cli_param}")
+                else:
+                    # When False, add --no- prefix
+                    # Evidence from vLLM help: --enable-chunked-prefill, --no-enable-chunked-prefill
+                    args.append(f"--no-{cli_param}")
             else:
                 args.extend([f"--{cli_param}", str(value)])
 
