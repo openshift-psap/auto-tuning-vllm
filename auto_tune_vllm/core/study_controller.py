@@ -395,19 +395,45 @@ class StudyController:
     def _create_sampler(config: StudyConfig) -> optuna.samplers.BaseSampler:
         """Create Optuna sampler from configuration."""
         sampler_name = config.optimization.sampler.lower()
+        n_startup_trials = config.optimization.n_startup_trials
+        n_trials = config.optimization.n_trials
+
+        # Validate n_startup_trials < n_trials to ensure the sampler algorithm runs
+        # This applies to all samplers with startup trials (TPE, GP, BoTorch)
+        if n_startup_trials >= n_trials:
+            suggestion = max(1, n_trials // 10)
+            min_trials = n_startup_trials + 1
+            msg = (
+                f"n_startup_trials ({n_startup_trials}) must be less than "
+                f"n_trials ({n_trials}). Otherwise all trials would be random. "
+                f"Suggestion: Set n_startup_trials to {suggestion} "
+                f"or increase n_trials to at least {min_trials}."
+            )
+            raise ValueError(msg)
+
+        # Log sampler configuration
+        logger.info(
+            f"Creating {sampler_name.upper()} sampler "
+            f"(n_startup_trials={n_startup_trials}, n_trials={n_trials})"
+        )
 
         if sampler_name == "tpe":
-            return TPESampler()
+            # TPESampler uses random sampling for first n_startup_trials
+            return TPESampler(n_startup_trials=n_startup_trials)
         elif sampler_name == "random":
+            # RandomSampler is always random, no startup trials concept
             return RandomSampler()
         elif sampler_name == "gp":
-            return GPSampler()
+            # GPSampler uses random sampling for initial trials
+            return GPSampler(n_startup_trials=n_startup_trials)
         elif sampler_name == "botorch":
-            return optuna.integration.BoTorchSampler()
+            # BoTorchSampler uses random sampling for initial trials
+            return optuna.integration.BoTorchSampler(n_startup_trials=n_startup_trials)
         elif sampler_name == "nsga2":
+            # NSGA2 is a genetic algorithm, no startup trials concept
             return NSGAIISampler()
         elif sampler_name == "grid":
-            # Build search space for grid sampler
+            # GridSampler is deterministic, no startup trials concept
             search_space = StudyController._create_search_space(config)
             grid_size = StudyController._calculate_grid_size(search_space)
             logger.info(
