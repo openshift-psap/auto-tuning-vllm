@@ -76,8 +76,7 @@ class TrialConfig:
 
     @property
     def vllm_args(self) -> List[str]:
-        """Convert non-environment parameters to vLLM command-line arguments.
-        """
+        """Convert non-environment parameters to vLLM command-line arguments."""
         args = []
         for param_name, value in self.parameters.items():
             # Skip environment variables - they're handled separately
