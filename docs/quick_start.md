@@ -223,7 +223,7 @@ You can now explore optimization history, parameter importance, and parallel coo
     ray stop --force
     ray start --head --dashboard-host=0.0.0.0
     ```
-- **Important**: Add `--max-concurrent <count>` or set `max_concurrent: <count>` in your YAML config.
+- **Important**: Add `--max-concurrent-trials <count>` or set `max_concurrent_trials: <count>` in your YAML config.
 
 ### Next Steps
 
