@@ -460,7 +460,7 @@ class StudyController:
     def run_optimization(
         self,
         n_trials: int | None = None,
-        max_concurrent: int | None = None,
+        max_concurrent_trials: int | None = None,
         poll_interval: float = 5.0,
     ) -> optuna.Study:
         """
@@ -468,7 +468,7 @@ class StudyController:
 
         Args:
             n_trials: Number of trials to run (overrides config)
-            max_concurrent: Maximum concurrent trials (None = unlimited)
+            max_concurrent_trials: Maximum concurrent trials (None = unlimited)
             poll_interval: How often to poll for completed trials (seconds)
 
         Returns:
@@ -477,20 +477,23 @@ class StudyController:
         total_trials = n_trials or self.config.optimization.n_trials
 
         # Require explicit, positive concurrency specification
-        if max_concurrent is None:
+        if max_concurrent_trials is None:
             msg = (
-                "❌ --max-concurrent is required to prevent GPU memory conflicts!\n\n"
+                "❌ --max-concurrent-trials is required to prevent "
+                "GPU memory conflicts!\n\n"
                 "Add to your YAML config:\n"
                 "  optimization:\n"
-                "    max_concurrent: 2  # Match your GPU count\n\n"
-                "Or use CLI: --max-concurrent 2"
+                "    max_concurrent_trials: 2  # Match your GPU count\n\n"
+                "Or use CLI: --max-concurrent-trials 2"
             )
             raise ValueError(msg)
-        if max_concurrent < 1:
-            raise ValueError("--max-concurrent must be >= 1")
+        if max_concurrent_trials < 1:
+            raise ValueError("--max-concurrent-trials must be >= 1")
 
         max_concurrent_str = (
-            max_concurrent if max_concurrent != float("inf") else "unlimited"
+            max_concurrent_trials
+            if max_concurrent_trials != float("inf")
+            else "unlimited"
         )
         logger.info(
             f"Starting optimization: {total_trials} trials, "
@@ -508,7 +511,7 @@ class StudyController:
                     remaining_trials=total_trials
                     - self.completed_trials
                     - len(self.active_trials),
-                    max_concurrent=max_concurrent,
+                    max_concurrent_trials=max_concurrent_trials,
                 )
 
                 # Poll for completed trials
@@ -610,9 +613,14 @@ class StudyController:
                 self.backend.shutdown()
                 logger.info("Backend shutdown complete.")
 
-    def _submit_available_trials(self, remaining_trials: int, max_concurrent: float):
+    def _submit_available_trials(
+        self, remaining_trials: int, max_concurrent_trials: float
+    ):
         """Submit new trials up to limits."""
-        while remaining_trials > 0 and len(self.active_trials) < max_concurrent:
+        while (
+            remaining_trials > 0
+            and len(self.active_trials) < max_concurrent_trials
+        ):
             trial = self.study.ask()
 
             # Check if these exact parameters have already been tried and failed

@@ -69,8 +69,8 @@ class OptimizationConfig:
     objective: Union[str, List[str]] = None  # Old format: "maximize", "minimize", list
     sampler: str = "tpe"  # "tpe", "random", "gp", "botorch", "nsga2", "grid"
     n_trials: int = 100
-    n_startup_trials: int = 10  # Number of random startup trials 
-    max_concurrent: Optional[int] = (
+    n_startup_trials: int = 10  # Number of random startup trials
+    max_concurrent_trials: Optional[int] = (
         None  # Maximum concurrent trials (required for resource management)
     )
 

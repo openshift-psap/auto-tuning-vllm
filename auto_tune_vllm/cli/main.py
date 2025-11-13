@@ -121,9 +121,9 @@ def optimize_command(
     n_trials: Optional[int] = typer.Option(
         None, "--trials", "-n", help="Number of trials (overrides config)"
     ),
-    max_concurrent: Optional[int] = typer.Option(
+    max_concurrent_trials: Optional[int] = typer.Option(
         None,
-        "--max-concurrent",
+        "--max-concurrent-trials",
         help="REQUIRED: Max concurrent trials to run simultaneously.",
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose logging"),
@@ -241,26 +241,33 @@ def optimize_command(
 
         # Run optimization
         # Use CLI value or fall back to YAML config
-        final_max_concurrent = (
-            max_concurrent or study_config.optimization.max_concurrent
+        final_max_concurrent_trials = (
+            max_concurrent_trials or study_config.optimization.max_concurrent_trials
         )
-        if final_max_concurrent is None:
+        if final_max_concurrent_trials is None:
             console.print(
                 "[bold red]"
-                "❌ --max-concurrent is required "
-                "(or set optimization.max_concurrent in the config)"
+                "❌ --max-concurrent-trials is required "
+                "(or set optimization.max_concurrent_trials in the config)"
                 "[/bold red]"
             )
             console.print(
-                "YAML:\n  optimization:\n    max_concurrent: 2  # Match your GPU count"
+                "YAML:\n  optimization:\n"
+                "    max_concurrent_trials: 2"
             )
             raise typer.Exit(1)
-        if final_max_concurrent < 1:
-            console.print("[bold red]❌ --max-concurrent must be >= 1[/bold red]")
+        if final_max_concurrent_trials < 1:
+            console.print(
+                "[bold red]❌ --max-concurrent-trials must be >= 1[/bold red]"
+            )
             raise typer.Exit(1)
 
         run_optimization_sync(
-            execution_backend, study_config, n_trials, final_max_concurrent, create_db
+            execution_backend,
+            study_config,
+            n_trials,
+            final_max_concurrent_trials,
+            create_db,
         )
 
     except Exception as e:
@@ -358,7 +365,7 @@ def run_optimization_sync(
     backend,
     config: StudyConfig,
     n_trials: Optional[int],
-    max_concurrent: Optional[int],
+    max_concurrent_trials: Optional[int],
     create_db: bool = False,
 ):
     """Synchronous optimization runner with progress display."""
@@ -388,7 +395,7 @@ def run_optimization_sync(
 
         try:
             # Run optimization
-            controller.run_optimization(n_trials, max_concurrent)
+            controller.run_optimization(n_trials, max_concurrent_trials)
 
             # Mark task as completed
             progress.update(
@@ -818,13 +825,10 @@ def resume_command(
         "--total-trials",
         help="Total number of trials to reach (overrides config)",
     ),
-    max_concurrent: Optional[int] = typer.Option(
+    max_concurrent_trials: Optional[int] = typer.Option(
         None,
-        "--max-concurrent",
-        help=(
-            "REQUIRED: Max concurrent trials to run simultaneously"
-            "(should match your GPU count)"
-        ),
+        "--max-concurrent-trials",
+        help="REQUIRED: Max concurrent trials to run simultaneously.",
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose logging"),
     start_ray_head: bool = typer.Option(
@@ -916,27 +920,35 @@ def resume_command(
 
         # Resume study
         # Use CLI value or fall back to YAML config
-        final_max_concurrent = (
-            max_concurrent or study_config.optimization.max_concurrent
+        final_max_concurrent_trials = (
+            max_concurrent_trials or study_config.optimization.max_concurrent_trials
         )
         if n_trials or n_total_trials:  # Only required if we will run new trials
-            if final_max_concurrent is None:
+            if final_max_concurrent_trials is None:
                 console.print(
                     "[bold red]"
-                    "❌ --max-concurrent is required to resume with new trials"
+                    "❌ --max-concurrent-trials is required to resume "
+                    "with new trials"
                     "[/bold red]"
                 )
-                console.print("Set CLI flag or config: optimization.max_concurrent")
+                console.print(
+                    "Set CLI flag or config: "
+                    "optimization.max_concurrent_trials"
+                )
                 raise typer.Exit(1)
-            if final_max_concurrent < 1:
-                console.print("[bold red]❌ --max-concurrent must be >= 1[/bold red]")
+            if final_max_concurrent_trials < 1:
+                console.print(
+                    "[bold red]"
+                    "❌ --max-concurrent-trials must be >= 1"
+                    "[/bold red]"
+                )
                 raise typer.Exit(1)
         resume_study_sync(
             execution_backend,
             study_config,
             n_trials,
             n_total_trials,
-            final_max_concurrent,
+            final_max_concurrent_trials,
         )
 
     except Exception as e:
@@ -951,7 +963,7 @@ def resume_study_sync(
     config: StudyConfig,
     n_trials: Optional[int],
     n_total_trials: Optional[int],
-    max_concurrent: Optional[int],
+    max_concurrent_trials: Optional[int],
 ):
     """Resume study execution."""
     controller = StudyController.resume_from_config(backend, config)
@@ -978,7 +990,7 @@ def resume_study_sync(
     if n_trials is not None:
         # --trials specifies additional trials to run
         console.print(f"Running {n_trials} additional trials...")
-        controller.run_optimization(n_trials, max_concurrent)
+        controller.run_optimization(n_trials, max_concurrent_trials)
 
         # Display updated results after running additional trials
         console.print(
@@ -1004,7 +1016,7 @@ def resume_study_sync(
                 f"Running {trials_to_run} more trials to reach total of "
                 f"{n_total_trials} trials..."
             )
-            controller.run_optimization(trials_to_run, max_concurrent)
+            controller.run_optimization(trials_to_run, max_concurrent_trials)
 
             # Display updated results after running additional trials
             console.print(
