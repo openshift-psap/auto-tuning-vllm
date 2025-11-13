@@ -479,7 +479,8 @@ class StudyController:
         # Require explicit, positive concurrency specification
         if max_concurrent_trials is None:
             msg = (
-                "❌ --max-concurrent-trials is required to prevent GPU memory conflicts!\n\n"
+                "❌ --max-concurrent-trials is required to prevent "
+                "GPU memory conflicts!\n\n"
                 "Add to your YAML config:\n"
                 "  optimization:\n"
                 "    max_concurrent_trials: 2  # Match your GPU count\n\n"
@@ -490,7 +491,9 @@ class StudyController:
             raise ValueError("--max-concurrent-trials must be >= 1")
 
         max_concurrent_str = (
-            max_concurrent_trials if max_concurrent_trials != float("inf") else "unlimited"
+            max_concurrent_trials
+            if max_concurrent_trials != float("inf")
+            else "unlimited"
         )
         logger.info(
             f"Starting optimization: {total_trials} trials, "
@@ -610,9 +613,14 @@ class StudyController:
                 self.backend.shutdown()
                 logger.info("Backend shutdown complete.")
 
-    def _submit_available_trials(self, remaining_trials: int, max_concurrent_trials: float):
+    def _submit_available_trials(
+        self, remaining_trials: int, max_concurrent_trials: float
+    ):
         """Submit new trials up to limits."""
-        while remaining_trials > 0 and len(self.active_trials) < max_concurrent_trials:
+        while (
+            remaining_trials > 0
+            and len(self.active_trials) < max_concurrent_trials
+        ):
             trial = self.study.ask()
 
             # Check if these exact parameters have already been tried and failed
