@@ -32,7 +32,7 @@ pip install -e .
 #### CLI Interface
 ```bash
 # Run optimization study
-auto-tune-vllm optimize --config config.yaml --max-concurrent 2
+auto-tune-vllm optimize --config config.yaml --max-concurrent-trials 2
 
 # Stream live logs  
 auto-tune-vllm logs --study-id 42 --trial-number 15
@@ -59,9 +59,9 @@ All ML dependencies (vLLM, Ray, GuideLLM, BoTorch) are included automatically.
 
 ### Ray Cluster Concurrency Validation
 
-**Issue**: The `--max-concurrent` parameter is not validated against available Ray cluster resources.
+**Issue**: The `--max-concurrent-trials` parameter is not validated against available Ray cluster resources.
 
-**Details**: When using Ray backend, the system doesn't check if the requested concurrency level is feasible given the cluster's GPU/CPU resources. For example, setting `--max-concurrent 10` on a cluster with only 4 GPUs will not warn the user that only 4 trials can actually run concurrently.
+**Details**: When using Ray backend, the system doesn't check if the requested concurrency level is feasible given the cluster's GPU/CPU resources. For example, setting `--max-concurrent-trials 10` on a cluster with only 4 GPUs will not warn the user that only 4 trials can actually run concurrently.
 
 **Reason**: There is not a clear answer if all the trials would use the exact same number of GPUs. For example, we might have different parallelism related tunings for different trials which might result in different number of GPUs being required for the trial.
 
@@ -81,7 +81,7 @@ All ML dependencies (vLLM, Ray, GuideLLM, BoTorch) are included automatically.
 auto-tune-vllm check-env --ray-cluster
 
 # Set realistic concurrency (e.g., if you have 4 GPUs)
-auto-tune-vllm optimize --config study.yaml --max-concurrent 4
+auto-tune-vllm optimize --config study.yaml --max-concurrent-trials 4
 ```
 
 ## License

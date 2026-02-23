@@ -148,7 +148,7 @@ Use an existing Ray cluster (recommended if one is already running):
 auto-tune-vllm optimize \
   --config examples/study_config_local_exec.yaml \
   --venv-path "$(pwd)/venv" \
-  --max-concurrent <count>
+  --max-concurrent-trials <count>
 ```
 
 Start a new Ray head locally (when no cluster is running):
@@ -157,7 +157,7 @@ Start a new Ray head locally (when no cluster is running):
 auto-tune-vllm optimize \
   --config examples/study_config_local_exec.yaml \
   --venv-path "$(pwd)/venv" \
-  --max-concurrent <count> \
+  --max-concurrent-trials <count> \
   --start-ray-head
 ```
 
