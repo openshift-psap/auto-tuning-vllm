@@ -76,21 +76,21 @@ Ensure you have the following installed and configured:
    
    **Option A: Deploy using Helm (recommended)**:
    ```bash
-   export KUBECONFIG=/home/thibrahi/kubeconfigs/psap-dgx-8h100-kubeconfig
+   # export KUBECONFIG=/path/to/your/kubeconfig  # Optional: use if not using default ~/.kube/config
    cd examples/helm
    ./deploy-postgres.sh [release-name]
    ```
    
    **Option B: Deploy using standalone YAML**:
    ```bash
-   export KUBECONFIG=/home/thibrahi/kubeconfigs/psap-dgx-8h100-kubeconfig
+   # export KUBECONFIG=/path/to/your/kubeconfig  # Optional: use if not using default ~/.kube/config
    cd examples/helm
    ./deploy-postgres-standalone.sh
    ```
    
    **Option C: Manual deployment with Helm**:
    ```bash
-   export KUBECONFIG=/home/thibrahi/kubeconfigs/psap-dgx-8h100-kubeconfig
+   # export KUBECONFIG=/path/to/your/kubeconfig  # Optional: use if not using default ~/.kube/config
    helm upgrade --install postgresql examples/helm \
      --namespace llm-d-trials \
      --set postgresql.enabled=true \
@@ -101,7 +101,7 @@ Ensure you have the following installed and configured:
    
    **Option D: Manual deployment with kubectl**:
    ```bash
-   export KUBECONFIG=/home/thibrahi/kubeconfigs/psap-dgx-8h100-kubeconfig
+   # export KUBECONFIG=/path/to/your/kubeconfig  # Optional: use if not using default ~/.kube/config
    kubectl apply -f examples/helm/postgres-standalone.yaml
    ```
    
@@ -137,7 +137,7 @@ Ensure you have the following installed and configured:
    
    **Option A: Automated test script** (recommended):
    ```bash
-   export KUBECONFIG=/home/thibrahi/kubeconfigs/psap-dgx-8h100-kubeconfig
+   # export KUBECONFIG=/path/to/your/kubeconfig  # Optional: use if not using default ~/.kube/config
    cd examples/helm
    
    # For standalone deployment
@@ -157,7 +157,7 @@ Ensure you have the following installed and configured:
    
    **Option B: Manual test pod**:
    ```bash
-   export KUBECONFIG=/home/thibrahi/kubeconfigs/psap-dgx-8h100-kubeconfig
+   # export KUBECONFIG=/path/to/your/kubeconfig  # Optional: use if not using default ~/.kube/config
    
    # For standalone deployment
    kubectl apply -f examples/helm/postgres-test-pod.yaml

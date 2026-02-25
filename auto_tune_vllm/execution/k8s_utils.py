@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Dict, Optional
 
 from ..core.trial import TrialConfig
 
@@ -14,10 +14,10 @@ logger = logging.getLogger(__name__)
 
 def sanitize_k8s_name(name: str) -> str:
     """Sanitize name for Kubernetes resource (lowercase, alphanumeric and hyphens only).
-    
+
     Args:
         name: Original name
-        
+
     Returns:
         Sanitized name suitable for Kubernetes resource
     """
@@ -51,7 +51,7 @@ def create_vllm_deployment(
     model_pvc: Optional[str] = None,
 ) -> str:
     """Create Kubernetes Deployment for vLLM server.
-    
+
     Args:
         trial_config: Trial configuration
         deployment_name: Name for the Deployment
@@ -61,7 +61,7 @@ def create_vllm_deployment(
         resource_limits: Resource limits (e.g., {"nvidia.com/gpu": "1", "memory": "32Gi"})
         kubeconfig: Path to kubeconfig file
         model_pvc: PersistentVolumeClaim name for model storage (e.g., "model-pvc")
-        
+
     Returns:
         Deployment name
     """
@@ -71,7 +71,7 @@ def create_vllm_deployment(
     except ImportError:
         logger.error("kubernetes library not available")
         raise RuntimeError("kubernetes library required for Kubernetes backend")
-    
+
     try:
         if kubeconfig:
             config.load_kube_config(config_file=kubeconfig)
@@ -82,28 +82,38 @@ def create_vllm_deployment(
                 config.load_kube_config()
     except Exception as e:
         raise RuntimeError(f"Failed to load Kubernetes config: {e}")
-    
+
     apps_v1 = client.AppsV1Api()
     core_v1 = client.CoreV1Api()
-    
+
     # Build vLLM command and args
     vllm_args = trial_config.vllm_args
-    env_vars = trial_config.environment_vars.copy() if trial_config.environment_vars else {}
-    
+    env_vars = (
+        trial_config.environment_vars.copy() if trial_config.environment_vars else {}
+    )
+
     # Set HF_HOME to PVC mount path if model_pvc is specified
     model_mount_path = "/mnt/models"
     if model_pvc:
         env_vars["HF_HOME"] = model_mount_path
-    
+        # Set cache directories to writable PVC location to avoid OpenShift permission issues
+        # flashinfer and vllm need writable cache directories
+        env_vars["HOME"] = f"{model_mount_path}/.cache/home"
+        env_vars["XDG_CACHE_HOME"] = f"{model_mount_path}/.cache"
+        env_vars["FLASHINFER_WORKSPACE_DIR"] = f"{model_mount_path}/.cache/flashinfer"
+        env_vars["VLLM_CACHE_ROOT"] = f"{model_mount_path}/.cache/vllm"
+
     # Build container command
     cmd = ["python3", "-m", "vllm.entrypoints.openai.api_server"]
     args = vllm_args.copy()
-    
+
     # Add model if not already in args
     model_in_args = any("--model" in arg for arg in args)
     if not model_in_args and trial_config.benchmark_config:
         args = ["--model", trial_config.benchmark_config.model] + args
-    
+
+    logger.info(f"vLLM arguments: {' '.join(args)}")
+
     try:
         # Create Deployment using proper Kubernetes client objects
         deployment = client.V1Deployment(
@@ -141,7 +151,12 @@ def create_vllm_deployment(
                                 image=vllm_image,
                                 command=cmd,
                                 args=args,
-                                env=[client.V1EnvVar(name=k, value=str(v)) for k, v in env_vars.items()] if env_vars else [],
+                                env=[
+                                    client.V1EnvVar(name=k, value=str(v))
+                                    for k, v in env_vars.items()
+                                ]
+                                if env_vars
+                                else [],
                                 ports=[
                                     client.V1ContainerPort(
                                         container_port=8000,
@@ -161,17 +176,24 @@ def create_vllm_deployment(
                                     client.V1VolumeMount(
                                         name="triton",
                                         mount_path="/.triton",
-                                    )
-                                ] + ([
-                                    client.V1VolumeMount(
-                                        name="model-pvc",
-                                        mount_path=model_mount_path,
-                                    )
-                                ] if model_pvc else []),
+                                    ),
+                                ]
+                                + (
+                                    [
+                                        client.V1VolumeMount(
+                                            name="model-pvc",
+                                            mount_path=model_mount_path,
+                                        )
+                                    ]
+                                    if model_pvc
+                                    else []
+                                ),
                                 resources=client.V1ResourceRequirements(
                                     requests=resource_requests or {},
                                     limits=resource_limits or {},
-                                ) if (resource_requests or resource_limits) else None,
+                                )
+                                if (resource_requests or resource_limits)
+                                else None,
                             )
                         ],
                         volumes=[
@@ -186,24 +208,29 @@ def create_vllm_deployment(
                             client.V1Volume(
                                 name="triton",
                                 empty_dir=client.V1EmptyDirVolumeSource(),
-                            )
-                        ] + ([
-                            client.V1Volume(
-                                name="model-pvc",
-                                persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
-                                    claim_name=model_pvc,
-                                ),
-                            )
-                        ] if model_pvc else []),
+                            ),
+                        ]
+                        + (
+                            [
+                                client.V1Volume(
+                                    name="model-pvc",
+                                    persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
+                                        claim_name=model_pvc,
+                                    ),
+                                )
+                            ]
+                            if model_pvc
+                            else []
+                        ),
                         restart_policy="Always",
                     ),
                 ),
             ),
         )
-        apps_v1.create_namespaced_deployment(
-            namespace=namespace, body=deployment
+        apps_v1.create_namespaced_deployment(namespace=namespace, body=deployment)
+        logger.info(
+            f"Created vLLM Deployment: {deployment_name} in namespace {namespace}"
         )
-        logger.info(f"Created vLLM Deployment: {deployment_name} in namespace {namespace}")
         return deployment_name
     except ApiException as e:
         logger.error(
@@ -226,7 +253,7 @@ def create_vllm_service(
     kubeconfig: Optional[str] = None,
 ) -> str:
     """Create Kubernetes Service for vLLM server.
-    
+
     Args:
         trial_config: Trial configuration
         service_name: Name for the Service
@@ -235,7 +262,7 @@ def create_vllm_service(
         service_type: Service type (ClusterIP, NodePort, LoadBalancer)
         service_port: Service port
         kubeconfig: Path to kubeconfig file
-        
+
     Returns:
         Service name
     """
@@ -245,7 +272,7 @@ def create_vllm_service(
     except ImportError:
         logger.error("kubernetes library not available")
         raise RuntimeError("kubernetes library required for Kubernetes backend")
-    
+
     try:
         if kubeconfig:
             config.load_kube_config(config_file=kubeconfig)
@@ -256,9 +283,9 @@ def create_vllm_service(
                 config.load_kube_config()
     except Exception as e:
         raise RuntimeError(f"Failed to load Kubernetes config: {e}")
-    
+
     core_v1 = client.CoreV1Api()
-    
+
     try:
         # Create Service using proper Kubernetes client objects
         service = client.V1Service(
@@ -289,9 +316,7 @@ def create_vllm_service(
                 ],
             ),
         )
-        core_v1.create_namespaced_service(
-            namespace=namespace, body=service
-        )
+        core_v1.create_namespaced_service(namespace=namespace, body=service)
         logger.info(f"Created vLLM Service: {service_name} in namespace {namespace}")
         return service_name
     except ApiException as e:
@@ -306,16 +331,19 @@ def create_vllm_service(
 
 
 def get_service_url(
-    service_name: str, namespace: str, service_type: str = "ClusterIP", kubeconfig: Optional[str] = None
+    service_name: str,
+    namespace: str,
+    service_type: str = "ClusterIP",
+    kubeconfig: Optional[str] = None,
 ) -> str:
     """Get URL for Kubernetes Service.
-    
+
     Args:
         service_name: Service name
         namespace: Kubernetes namespace
         service_type: Service type
         kubeconfig: Path to kubeconfig file
-        
+
     Returns:
         Service URL
     """
@@ -325,7 +353,7 @@ def get_service_url(
     except ImportError:
         logger.error("kubernetes library not available")
         raise RuntimeError("kubernetes library required for Kubernetes backend")
-    
+
     try:
         if kubeconfig:
             config.load_kube_config(config_file=kubeconfig)
@@ -336,14 +364,14 @@ def get_service_url(
                 config.load_kube_config()
     except Exception as e:
         raise RuntimeError(f"Failed to load Kubernetes config: {e}")
-    
+
     core_v1 = client.CoreV1Api()
-    
+
     try:
         service = core_v1.read_namespaced_service(
             name=service_name, namespace=namespace
         )
-        
+
         if service_type == "LoadBalancer":
             # Wait for LoadBalancer IP
             max_wait = 300  # 5 minutes
@@ -352,15 +380,18 @@ def get_service_url(
                 service = core_v1.read_namespaced_service(
                     name=service_name, namespace=namespace
                 )
-                if service.status.load_balancer and service.status.load_balancer.ingress:
+                if (
+                    service.status.load_balancer
+                    and service.status.load_balancer.ingress
+                ):
                     ingress = service.status.load_balancer.ingress[0]
                     ip = ingress.ip or ingress.hostname
                     if ip:
                         port = service.spec.ports[0].port
-                        return f"http://{ip}:{port}/v1"
+                        return f"http://{ip}:{port}"
                 time.sleep(5)
             raise RuntimeError(f"LoadBalancer IP not assigned after {max_wait}s")
-        
+
         elif service_type == "NodePort":
             # Get node IP (simplified - uses first node)
             nodes = core_v1.list_node()
@@ -368,28 +399,31 @@ def get_service_url(
                 raise RuntimeError("No nodes found in cluster")
             node_ip = nodes.items[0].status.addresses[0].address
             node_port = service.spec.ports[0].node_port
-            return f"http://{node_ip}:{node_port}/v1"
-        
+            return f"http://{node_ip}:{node_port}"
+
         else:  # ClusterIP
             # Return cluster-internal URL
             port = service.spec.ports[0].port
-            return f"http://{service_name}.{namespace}.svc.cluster.local:{port}/v1"
-    
+            return f"http://{service_name}.{namespace}.svc.cluster.local:{port}"
+
     except ApiException as e:
         raise RuntimeError(f"Failed to get service URL: {e}")
 
 
 def wait_for_deployment_ready(
-    deployment_name: str, namespace: str, timeout: int = 600, kubeconfig: Optional[str] = None
+    deployment_name: str,
+    namespace: str,
+    timeout: int = 600,
+    kubeconfig: Optional[str] = None,
 ) -> bool:
     """Wait for Kubernetes Deployment to be ready.
-    
+
     Args:
         deployment_name: Deployment name
         namespace: Kubernetes namespace
         timeout: Timeout in seconds
         kubeconfig: Path to kubeconfig file
-        
+
     Returns:
         True if ready, False if timeout
     """
@@ -399,7 +433,7 @@ def wait_for_deployment_ready(
     except ImportError:
         logger.error("kubernetes library not available")
         return False
-    
+
     try:
         if kubeconfig:
             config.load_kube_config(config_file=kubeconfig)
@@ -411,16 +445,16 @@ def wait_for_deployment_ready(
     except Exception as e:
         logger.error(f"Failed to load Kubernetes config: {e}")
         return False
-    
+
     apps_v1 = client.AppsV1Api()
     start_time = time.time()
-    
+
     while time.time() - start_time < timeout:
         try:
             deployment = apps_v1.read_namespaced_deployment(
                 name=deployment_name, namespace=namespace
             )
-            
+
             if (
                 deployment.status.ready_replicas is not None
                 and deployment.status.ready_replicas >= 1
@@ -428,7 +462,7 @@ def wait_for_deployment_ready(
             ):
                 logger.info(f"Deployment {deployment_name} is ready")
                 return True
-            
+
             time.sleep(5)
         except ApiException as e:
             if e.status == 404:
@@ -436,7 +470,7 @@ def wait_for_deployment_ready(
                 return False
             logger.warning(f"Error checking deployment status: {e}")
             time.sleep(5)
-    
+
     logger.warning(f"Deployment {deployment_name} not ready after {timeout}s")
     return False
 
@@ -448,7 +482,7 @@ def delete_vllm_resources(
     kubeconfig: Optional[str] = None,
 ) -> None:
     """Delete vLLM Deployment and Service.
-    
+
     Args:
         deployment_name: Deployment name
         service_name: Service name
@@ -461,7 +495,7 @@ def delete_vllm_resources(
     except ImportError:
         logger.error("kubernetes library not available")
         return
-    
+
     try:
         if kubeconfig:
             config.load_kube_config(config_file=kubeconfig)
@@ -473,20 +507,18 @@ def delete_vllm_resources(
     except Exception as e:
         logger.error(f"Failed to load Kubernetes config: {e}")
         return
-    
+
     apps_v1 = client.AppsV1Api()
     core_v1 = client.CoreV1Api()
-    
+
     # Delete Service
     try:
-        core_v1.delete_namespaced_service(
-            name=service_name, namespace=namespace
-        )
+        core_v1.delete_namespaced_service(name=service_name, namespace=namespace)
         logger.info(f"Deleted Service: {service_name}")
     except ApiException as e:
         if e.status != 404:
             logger.warning(f"Failed to delete Service {service_name}: {e}")
-    
+
     # Delete Deployment
     try:
         apps_v1.delete_namespaced_deployment(

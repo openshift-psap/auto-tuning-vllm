@@ -1,0 +1,82 @@
+# TEST configuration for MLPerf Harness - GPT-OSS 120B
+# Quick test with 10 samples and 2 trials to verify:
+# 1. Parquet dataset loading works
+# 2. MLflow artifact tracking to S3 works
+# 3. AWS credentials are properly injected
+
+study:
+  prefix: "autotune_test_gpt_oss_quick"
+  database_url: "postgresql://postgres:postgres@localhost:5432/optuna-k8s-direct"
+
+execution:
+  backend: "k8s"
+  k8s:
+    namespace: "autotune-aanya"
+    vllm_image: "vllm/vllm-openai:latest"
+    benchmark_image: "quay.io/rh-ee-aansharm/mlperf-6.0@sha256:89c3c57281c4bab40b8b901316f27eee5d16b2b3db824508260e0494ba21d0fc"  # Jan 23 harness + usage.completion_tokens + dataset included + writable permissions
+    service_type: "ClusterIP"
+    service_port: 8000
+    kubeconfig: "/Users/aansharm/.kube/config"
+    model_pvc: "model-cache-pvc"
+    benchmark_pvc: "results-pvc-mlperf"
+    resource_requests:
+      nvidia.com/gpu: "8"
+    resource_limits:
+      nvidia.com/gpu: "8"
+
+optimization:
+  approach: "single_objective"
+  objectives:
+    - metric: "output_tokens_per_second"
+      direction: "maximize"
+      percentile: "median"
+  sampler: "tpe"
+  n_trials: 2  # QUICK TEST: Only 2 trials
+  n_startup_trials: 1
+
+benchmark:
+  benchmark_type: "mlperf"
+  model: "openai/gpt-oss-120b"
+  scenario: "Offline"
+  dataset_path: "/vllm-workspace/mlperf-inference-6.0-redhat/harness/data/v4/perf_eval_ref.parquet"  # Parquet dataset
+  lg_model_name: "gpt-oss-120b"
+  num_samples: 10  # QUICK TEST: Only 10 samples (instead of 6396)
+  output_dir: "/mnt/results/harness-output-quick-test"  # On PVC to preserve error logs
+  mlflow_experiment_name: "autotune-gpt-oss-120b-offline-quick-test"  # Separate experiment for testing
+  mlflow_host: "150.239.115.202"
+  test_mode: "performance"
+  max_seconds: 1800  # 30 minutes for quick test (100 samples with 131K context)
+  tunables: {}
+
+logging:
+  database_url: "postgresql://postgres:postgres@localhost:5432/optuna-k8s-direct"
+  file_path: "/tmp/auto-tune-vllm-logs"
+  log_level: "INFO"
+
+parameters:
+  # Reduced parameter space for quick test
+  max_num_batched_tokens:
+    enabled: true
+    min: 8192
+    max: 16384
+    step: 8192  # Only 2 options: 8192, 16384
+
+  gpu_memory_utilization:
+    enabled: true
+    min: 0.90
+    max: 0.90
+    step: 0.05  # Fixed at 0.90
+
+  kv_cache_dtype:
+    enabled: true
+    options: ["auto"]  # Only test "auto"
+
+  max_num_seqs:
+    enabled: true
+    min: 128
+    max: 128
+    step: 32  # Fixed at 128
+
+static_parameters:
+  tensor_parallel_size: 8
+  max_model_len: 131072  # Full GPT-OSS context length (required for MLPerf dataset)

@@ -39,7 +39,7 @@ execution:
     
     namespace: "llm-d-trials"  # Kubernetes namespace for deployments
     benchmark_image: "ghcr.io/vllm-project/guidellm:v0.5.1"  # Container image for benchmark Jobs
-    kubeconfig: "/home/thibrahi/kubeconfigs/psap-dgx-8h100-kubeconfig"  # Custom kubeconfig path
+    kubeconfig: "$HOME/.kube/config"  # Custom kubeconfig path
 
 optimization:
   preset: "high_throughput"  # Optimize for maximum throughput

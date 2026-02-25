@@ -161,4 +161,3 @@ class BufferedLogHandler(logging.Handler):
         self.flush()
         self.target_handler.close()
         super().close()
-

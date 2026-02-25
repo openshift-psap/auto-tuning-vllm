@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: results-pvc-mlperf
+  namespace: autotune-aanya
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: lvms-lvm-vg-nvme-dgx
+  resources:
+    requests:
+      storage: 50Gi

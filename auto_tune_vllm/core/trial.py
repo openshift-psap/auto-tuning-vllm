@@ -161,7 +161,7 @@ class ExecutionInfo:
     vllm_startup_duration: Optional[float] = None
     benchmark_duration: Optional[float] = None
     trial_status: Optional[str] = None  # "success", "vllm_crash", "benchmark_crash"
-    
+
     # Helm deployment tracking
     helm_release_name: Optional[str] = None  # Helm release name for reproducibility
     benchmark_job_name: Optional[str] = None  # Kubernetes Job name for benchmark

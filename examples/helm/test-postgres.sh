@@ -5,7 +5,7 @@
 set -e
 
 # Configuration
-KUBECONFIG="${KUBECONFIG:-/home/thibrahi/kubeconfigs/psap-dgx-8h100-kubeconfig}"
+KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
 NAMESPACE="llm-d-trials"
 POSTGRES_SERVICE="${1:-postgresql}"
 TEST_POD_NAME="postgres-test-pod"

@@ -6,7 +6,7 @@ from .manager import CentralizedLogger, LogStreamer
 __all__ = [
     "CentralizedLogger",
     "LogStreamer",
-    "PostgreSQLLogHandler", 
+    "PostgreSQLLogHandler",
     "LocalFileHandler",
     "NFSLogHandler",
 ]

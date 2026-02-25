@@ -2,7 +2,7 @@
 # PostgreSQL StatefulSet - Standalone deployment
 # Usage: kubectl apply -f postgres-standalone.yaml
 # Make sure to set KUBECONFIG and create namespace first:
-#   export KUBECONFIG=/home/thibrahi/kubeconfigs/psap-dgx-8h100-kubeconfig
+#   export KUBECONFIG=/path/to/your/kubeconfig  # Optional: use if not using default ~/.kube/config
 #   kubectl create namespace llm-d-trials
 
 apiVersion: v1

@@ -430,7 +430,7 @@ class VLLMCLIParser:
 
         Returns:
             Dictionary of exported defaults
-        """ # noqa: E501
+        """  # noqa: E501
         if sections is None:
             # Default to optimization-relevant sections
             sections = [
@@ -503,7 +503,7 @@ class VLLMCLIParser:
 
         Returns:
             Path to the created version-specific defaults file
-        """ # noqa: E501
+        """  # noqa: E501
         from pathlib import Path
 
         # Parse arguments if not already done

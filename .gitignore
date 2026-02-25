@@ -30,4 +30,4 @@ Thumbs.db
 
 # Default logs and artifacts
 logs/
-optuna_studies/
+optuna_studies/v4/

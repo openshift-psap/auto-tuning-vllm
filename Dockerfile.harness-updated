@@ -1,0 +1,18 @@
+# Use the existing harness image as base
+FROM quay.io/rh-ee-nmiriyal/mlperf-6.0:harness
+
+# Update 1: Install MLflow dependency
+# Use --ignore-installed to bypass distutils-installed package conflicts
+RUN pip install --ignore-installed blinker mlflow
+
+# Update 2: Add v4 dataset - performance parquet file (~4k samples)
+COPY v4/perf/perf_eval_ref.parquet /vllm-workspace/mlperf-inference-6.0-redhat/harness/data/v4/perf_eval_ref.parquet
+COPY v4/perf/input_ids_padded_perf_eval.npy /vllm-workspace/mlperf-inference-6.0-redhat/harness/data/v4/input_ids_padded_perf_eval.npy
+COPY v4/perf/input_lens_perf_eval.npy /vllm-workspace/mlperf-inference-6.0-redhat/harness/data/v4/input_lens_perf_eval.npy
+
+RUN chmod -R 777 /vllm-workspace/mlperf-inference-6.0-redhat/harness/data/v4
+# Set working directory
+WORKDIR /vllm-workspace/mlperf-inference-6.0-redhat
+
+# Keep the same entrypoint as the original image
+# (The original image likely has CMD or ENTRYPOINT set)

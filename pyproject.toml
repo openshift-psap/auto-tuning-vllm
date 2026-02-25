@@ -30,6 +30,7 @@ dependencies = [
     "typer>=0.9.0",
     "rich>=13.0.0",
     "requests>=2.28.0",
+    "mlflow>=2.0.0",
 ]
 
 [project.optional-dependencies]
@@ -82,7 +83,7 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
-ignore = []
+ignore = ["E501"]  # Ignore line too long - will address in separate refactor
 
 [tool.ruff.format]
 quote-style = "double"

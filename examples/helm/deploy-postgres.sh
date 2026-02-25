@@ -5,7 +5,7 @@
 set -e
 
 # Configuration
-KUBECONFIG="${KUBECONFIG:-/home/thibrahi/kubeconfigs/psap-dgx-8h100-kubeconfig}"
+KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
 NAMESPACE="llm-d-trials"
 RELEASE_NAME="${1:-postgresql}"
 CHART_PATH="$(dirname "$0")"

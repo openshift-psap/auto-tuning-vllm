@@ -276,7 +276,9 @@ class HelmConfig:
     chart_repo: Optional[str] = None  # Helm chart repository URL
     chart_name: Optional[str] = None  # Chart name from repository
     chart_version: Optional[str] = None  # Chart version
-    chart_type: Optional[str] = None  # Chart type: "llm-d-modelservice" or "vllm" (REQUIRED)
+    chart_type: Optional[str] = (
+        None  # Chart type: "llm-d-modelservice" or "vllm" (REQUIRED)
+    )
     namespace: str = "default"  # Kubernetes namespace
     kubeconfig: Optional[str] = None  # Path to kubeconfig file
     values_template: Optional[str] = None  # Path to values template file
@@ -292,7 +294,9 @@ class HelmConfig:
     # Gaie chart configuration
     gaie_chart_version: Optional[str] = None  # Gaie chart version
     gaie_values_template: Optional[str] = None  # Path to gaie values template
-    model_pvc: Optional[str] = None  # PersistentVolumeClaim name for model storage (e.g., "model-pvc")
+    model_pvc: Optional[str] = (
+        None  # PersistentVolumeClaim name for model storage (e.g., "model-pvc")
+    )
 
 
 @dataclass
@@ -301,14 +305,26 @@ class KubernetesConfig:
 
     namespace: str = "default"  # Kubernetes namespace
     kubeconfig: Optional[str] = None  # Path to kubeconfig file
-    vllm_image: Optional[str] = None  # vLLM container image (default: auto-detect from vLLM version)
+    vllm_image: Optional[str] = (
+        None  # vLLM container image (default: auto-detect from vLLM version)
+    )
     benchmark_image: Optional[str] = None  # Container image for benchmark Jobs
-    service_type: str = "ClusterIP"  # Kubernetes Service type: ClusterIP, NodePort, or LoadBalancer
+    service_type: str = (
+        "ClusterIP"  # Kubernetes Service type: ClusterIP, NodePort, or LoadBalancer
+    )
     service_port: int = 8000  # Service port for vLLM server
-    resource_requests: Optional[Dict[str, str]] = None  # Resource requests (e.g., {"nvidia.com/gpu": "1"})
-    resource_limits: Optional[Dict[str, str]] = None  # Resource limits (e.g., {"nvidia.com/gpu": "1", "memory": "32Gi"})
-    model_pvc: Optional[str] = None  # PersistentVolumeClaim name for model storage (e.g., "model-pvc")
-    benchmark_pvc: Optional[str] = None  # PersistentVolumeClaim name for benchmark results storage (REQUIRED for k8s backend, no emptyDir fallback)
+    resource_requests: Optional[Dict[str, str]] = (
+        None  # Resource requests (e.g., {"nvidia.com/gpu": "1"})
+    )
+    resource_limits: Optional[Dict[str, str]] = (
+        None  # Resource limits (e.g., {"nvidia.com/gpu": "1", "memory": "32Gi"})
+    )
+    model_pvc: Optional[str] = (
+        None  # PersistentVolumeClaim name for model storage (e.g., "model-pvc")
+    )
+    benchmark_pvc: Optional[str] = (
+        None  # PersistentVolumeClaim name for benchmark results storage (REQUIRED for k8s backend, no emptyDir fallback)
+    )
 
 
 @dataclass
@@ -658,20 +674,23 @@ class ConfigValidator:
             ]
 
         optimization = OptimizationConfig(**opt_config_data)
-        
+
         # Parse benchmark configuration: separate constants from tunables
         raw_benchmark = raw_config.get("benchmark", {})
         if not isinstance(raw_benchmark, dict):
             raise TypeError("Benchmark configuration must be a dictionary")
-        
+
         # Extract constants (all fields except "tunables" and k8s-specific fields)
         # Filter out fields that don't belong in BenchmarkConfig (e.g., benchmark_pvc belongs in k8s section)
-        k8s_only_fields = {"benchmark_pvc"}  # Fields that should be in k8s section, not benchmark section
+        k8s_only_fields = {
+            "benchmark_pvc"
+        }  # Fields that should be in k8s section, not benchmark section
         benchmark_constants = {
-            k: v for k, v in raw_benchmark.items() 
+            k: v
+            for k, v in raw_benchmark.items()
             if k != "tunables" and k not in k8s_only_fields
         }
-        
+
         # Warn if k8s-only fields are found in benchmark section
         found_k8s_fields = set(raw_benchmark.keys()) & k8s_only_fields
         if found_k8s_fields:
@@ -679,7 +698,7 @@ class ConfigValidator:
                 f"Fields {found_k8s_fields} found in benchmark section but belong in k8s section. "
                 f"Ignoring them in benchmark config. Please move them to execution.k8s section."
             )
-        
+
         # Extract tunables section
         benchmark_tunables_raw = raw_benchmark.get("tunables")
         if benchmark_tunables_raw is None:
@@ -689,14 +708,14 @@ class ConfigValidator:
             )
         if not isinstance(benchmark_tunables_raw, dict):
             raise TypeError("Benchmark tunables must be a dictionary")
-        
+
         # Validate no field appears in both constants and tunables
         overlap = set(benchmark_constants.keys()) & set(benchmark_tunables_raw.keys())
         if overlap:
             raise ValueError(
                 f"Fields cannot be in both benchmark constants and tunables: {overlap}"
             )
-        
+
         # Validate dataset vs synthetic data parameters
         # If dataset is provided, prompt_tokens and output_tokens cannot be specified
         dataset_value = benchmark_constants.get("dataset")
@@ -707,38 +726,42 @@ class ConfigValidator:
                 synthetic_params_in_constants.append("prompt_tokens")
             if "output_tokens" in benchmark_constants:
                 synthetic_params_in_constants.append("output_tokens")
-            
+
             if synthetic_params_in_constants:
                 raise ValueError(
                     f"Cannot specify synthetic data parameters ({synthetic_params_in_constants}) "
                     f"when dataset is provided. Dataset: {dataset_value}"
                 )
-            
+
             # Check tunables - these are also synthetic data parameters
             synthetic_params_in_tunables = []
             if "prompt_tokens" in benchmark_tunables_raw:
                 synthetic_params_in_tunables.append("prompt_tokens")
             if "output_tokens" in benchmark_tunables_raw:
                 synthetic_params_in_tunables.append("output_tokens")
-            
+
             if synthetic_params_in_tunables:
                 raise ValueError(
                     f"Cannot specify synthetic data parameters as tunables ({synthetic_params_in_tunables}) "
                     f"when dataset is provided. Dataset: {dataset_value}"
                 )
-        
+
         # Build BenchmarkConfig from constants only
         benchmark = BenchmarkConfig(**benchmark_constants)
-        
+
+        # Inject tensor_parallel_size from static_params for MLflow tagging
+        if "tensor_parallel_size" in static_params:
+            benchmark.tensor_parallel_size = static_params["tensor_parallel_size"]
+
         # Build benchmark tunables using same logic as vLLM parameters
         validated_benchmark_tunables = {}
         for tunable_name, tunable_config in benchmark_tunables_raw.items():
             if not tunable_config.get("enabled", True):
                 continue
-            
+
             # Check if this is an environment variable (unlikely for benchmarks, but support it)
             is_env_var = tunable_config.get("env_var", False)
-            
+
             if is_env_var:
                 if (
                     "range" in tunable_config
@@ -750,13 +773,13 @@ class ConfigValidator:
                         f"Benchmark tunable '{tunable_name}' cannot use "
                         f"range configurations when env_var is True. Only list options are allowed."
                     )
-                
+
                 if "options" not in tunable_config:
                     raise ValueError(
                         f"Benchmark tunable '{tunable_name}' with env_var=True "
                         f"must specify options as a list"
                     )
-                
+
                 validated_tunable = EnvironmentParameter(
                     name=tunable_name,
                     enabled=tunable_config.get("enabled", True),
@@ -771,7 +794,7 @@ class ConfigValidator:
                 validated_tunable = self._build_parameter_config(
                     tunable_name, tunable_config
                 )
-            
+
             validated_benchmark_tunables[tunable_name] = validated_tunable
 
         # Handle optional database_url and storage_file
@@ -836,7 +859,9 @@ class ConfigValidator:
                     if isinstance(helm_data, dict):
                         helm_config = HelmConfig(**helm_data)
                 if "k8s" in execution_data or "kubernetes" in execution_data:
-                    k8s_data = execution_data.get("k8s") or execution_data.get("kubernetes")
+                    k8s_data = execution_data.get("k8s") or execution_data.get(
+                        "kubernetes"
+                    )
                     if isinstance(k8s_data, dict):
                         k8s_config = KubernetesConfig(**k8s_data)
 

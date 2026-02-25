@@ -51,9 +51,16 @@ class CentralizedLogger:
                         )
                     """)
 
+                    # Add pod columns if they don't exist (migration)
+                    cur.execute("""
+                        ALTER TABLE trial_logs
+                        ADD COLUMN IF NOT EXISTS pod_name VARCHAR(255),
+                        ADD COLUMN IF NOT EXISTS container_name VARCHAR(100)
+                    """)
+
                     # Create indexes for efficient querying
                     cur.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_trial_logs_study_trial 
+                        CREATE INDEX IF NOT EXISTS idx_trial_logs_study_trial
                         ON trial_logs (study_name, trial_id)
                     """)
 
@@ -65,6 +72,11 @@ class CentralizedLogger:
                     cur.execute("""
                         CREATE INDEX IF NOT EXISTS idx_trial_logs_type
                         ON trial_logs (study_name, trial_type)
+                    """)
+
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_trial_logs_pod
+                        ON trial_logs (study_name, trial_id, pod_name)
                     """)
 
             logger.info(f"Log tables ready for study {self.study_name}")
@@ -196,9 +208,16 @@ class LogStreamer:
                             )
                         """)
 
+                        # Add pod columns (for new table creation)
+                        cur.execute("""
+                            ALTER TABLE trial_logs
+                            ADD COLUMN IF NOT EXISTS pod_name VARCHAR(255),
+                            ADD COLUMN IF NOT EXISTS container_name VARCHAR(100)
+                        """)
+
                         # Create indexes for efficient querying
                         cur.execute("""
-                            CREATE INDEX idx_trial_logs_study_trial 
+                            CREATE INDEX idx_trial_logs_study_trial
                             ON trial_logs (study_name, trial_id)
                         """)
 
@@ -210,6 +229,11 @@ class LogStreamer:
                         cur.execute("""
                             CREATE INDEX idx_trial_logs_type
                             ON trial_logs (study_name, trial_type)
+                        """)
+
+                        cur.execute("""
+                            CREATE INDEX idx_trial_logs_pod
+                            ON trial_logs (study_name, trial_id, pod_name)
                         """)
 
                         logger.info("Log tables created successfully")

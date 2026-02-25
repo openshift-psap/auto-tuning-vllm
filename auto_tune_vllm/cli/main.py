@@ -9,6 +9,7 @@ from typing import Optional
 
 try:
     import ray
+
     RAY_AVAILABLE = True
 except ImportError:
     RAY_AVAILABLE = False
@@ -159,13 +160,17 @@ def optimize_command(
         None, "--helm-chart-repo", help="Helm chart repository URL (for Helm backend)"
     ),
     helm_chart_name: Optional[str] = typer.Option(
-        None, "--helm-chart-name", help="Helm chart name from repository (for Helm backend)"
+        None,
+        "--helm-chart-name",
+        help="Helm chart name from repository (for Helm backend)",
     ),
     helm_chart_version: Optional[str] = typer.Option(
         None, "--helm-chart-version", help="Helm chart version (for Helm backend)"
     ),
     k8s_namespace: Optional[str] = typer.Option(
-        None, "--k8s-namespace", help="Kubernetes namespace for deployments (Helm or k8s backend)"
+        None,
+        "--k8s-namespace",
+        help="Kubernetes namespace for deployments (Helm or k8s backend)",
     ),
     kubeconfig: Optional[str] = typer.Option(
         None, "--kubeconfig", help="Path to kubeconfig file (for Helm or k8s backend)"
@@ -188,7 +193,9 @@ def optimize_command(
                 "Error: At least one Python environment option must be specified for Ray backend"
                 "[/bold red]"
             )
-            console.print("Choose one of: --python-executable, --venv-path, or --conda-env")
+            console.print(
+                "Choose one of: --python-executable, --venv-path, or --conda-env"
+            )
             raise typer.Exit(1)
 
         if len(specified_options) > 1:
@@ -197,7 +204,9 @@ def optimize_command(
                 "Error: Only one Python environment option can be specified at a time"
                 "[/bold red]"
             )
-            console.print("Choose one of: --python-executable, --venv-path, or --conda-env")
+            console.print(
+                "Choose one of: --python-executable, --venv-path, or --conda-env"
+            )
             raise typer.Exit(1)
 
     console.print("[bold green]Starting auto-tune-vllm optimization[/bold green]")
@@ -230,14 +239,16 @@ def optimize_command(
 
         # Handle --override flag: delete existing study before creating new one
         if override:
-            console.print(f"[yellow]Override flag set: deleting existing study '{study_config.study_name}' if it exists[/yellow]")
+            console.print(
+                f"[yellow]Override flag set: deleting existing study '{study_config.study_name}' if it exists[/yellow]"
+            )
             try:
-                from ..core.storage.utils import get_storage, StorageType
-                import optuna
                 import sqlite3
-                
+
+                from ..core.storage.utils import StorageType, get_storage
+
                 storage, storage_type = get_storage(study_config, resume_study=False)
-                
+
                 if storage_type == StorageType.SQLITE:
                     # For SQLite: delete the study from the database file or delete the entire file
                     if study_config.storage_file:
@@ -247,66 +258,119 @@ def optimize_command(
                             conn = sqlite3.connect(str(storage_path))
                             try:
                                 cursor = conn.cursor()
-                                
+
                                 # Get study ID first
-                                cursor.execute("SELECT study_id FROM studies WHERE study_name = ?", (study_config.study_name,))
+                                cursor.execute(
+                                    "SELECT study_id FROM studies WHERE study_name = ?",
+                                    (study_config.study_name,),
+                                )
                                 study_row = cursor.fetchone()
-                                
+
                                 if study_row:
                                     study_id = study_row[0]
-                                    
+
                                     # Delete trial-related data
-                                    cursor.execute("DELETE FROM trial_intermediate_values WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = ?)", (study_id,))
-                                    cursor.execute("DELETE FROM trial_system_attributes WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = ?)", (study_id,))
-                                    cursor.execute("DELETE FROM trial_user_attributes WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = ?)", (study_id,))
-                                    cursor.execute("DELETE FROM trial_values WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = ?)", (study_id,))
-                                    cursor.execute("DELETE FROM trial_params WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = ?)", (study_id,))
-                                    cursor.execute("DELETE FROM trials WHERE study_id = ?", (study_id,))
-                                    cursor.execute("DELETE FROM studies WHERE study_id = ?", (study_id,))
-                                    
+                                    cursor.execute(
+                                        "DELETE FROM trial_intermediate_values WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = ?)",
+                                        (study_id,),
+                                    )
+                                    cursor.execute(
+                                        "DELETE FROM trial_system_attributes WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = ?)",
+                                        (study_id,),
+                                    )
+                                    cursor.execute(
+                                        "DELETE FROM trial_user_attributes WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = ?)",
+                                        (study_id,),
+                                    )
+                                    cursor.execute(
+                                        "DELETE FROM trial_values WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = ?)",
+                                        (study_id,),
+                                    )
+                                    cursor.execute(
+                                        "DELETE FROM trial_params WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = ?)",
+                                        (study_id,),
+                                    )
+                                    cursor.execute(
+                                        "DELETE FROM trials WHERE study_id = ?",
+                                        (study_id,),
+                                    )
+                                    cursor.execute(
+                                        "DELETE FROM studies WHERE study_id = ?",
+                                        (study_id,),
+                                    )
+
                                     conn.commit()
-                                    
+
                                     # Verify deletion
-                                    cursor.execute("SELECT study_id FROM studies WHERE study_name = ?", (study_config.study_name,))
+                                    cursor.execute(
+                                        "SELECT study_id FROM studies WHERE study_name = ?",
+                                        (study_config.study_name,),
+                                    )
                                     if cursor.fetchone() is None:
-                                        console.print(f"[green]✅ Deleted existing study '{study_config.study_name}' from SQLite storage[/green]")
+                                        console.print(
+                                            f"[green]✅ Deleted existing study '{study_config.study_name}' from SQLite storage[/green]"
+                                        )
                                     else:
-                                        console.print(f"[yellow]Warning: Study deletion may not have completed successfully[/yellow]")
+                                        console.print(
+                                            "[yellow]Warning: Study deletion may not have completed successfully[/yellow]"
+                                        )
                                 else:
                                     # Study not found in database, but file exists - delete the file to clear any cached state
                                     conn.close()
                                     storage_path.unlink()
-                                    console.print(f"[green]✅ Deleted SQLite database file to clear cached study state[/green]")
+                                    console.print(
+                                        "[green]✅ Deleted SQLite database file to clear cached study state[/green]"
+                                    )
                             finally:
                                 if conn:
                                     conn.close()
                         else:
-                            console.print(f"[yellow]Storage file does not exist, nothing to delete[/yellow]")
+                            console.print(
+                                "[yellow]Storage file does not exist, nothing to delete[/yellow]"
+                            )
                     else:
                         # In-memory storage - nothing to delete
-                        console.print(f"[yellow]Using in-memory storage, nothing to delete[/yellow]")
+                        console.print(
+                            "[yellow]Using in-memory storage, nothing to delete[/yellow]"
+                        )
                 elif storage_type == StorageType.POSTGRESQL:
                     # For PostgreSQL: use clear_study_data function
                     if study_config.database_url:
-                            result = clear_study_data(
-                                study_config.study_name,
-                                study_config.database_url,
-                                clear_logs=False
+                        result = clear_study_data(
+                            study_config.study_name,
+                            study_config.database_url,
+                            clear_logs=False,
+                        )
+                        if result["success"]:
+                            console.print(
+                                f"[green]✅ Deleted existing study '{study_config.study_name}' from PostgreSQL storage[/green]"
                             )
-                            if result["success"]:
-                                console.print(f"[green]✅ Deleted existing study '{study_config.study_name}' from PostgreSQL storage[/green]")
-                            elif result.get("error") and "not found" in result["error"].lower():
-                                console.print(f"[yellow]Study '{study_config.study_name}' not found in PostgreSQL storage, nothing to delete[/yellow]")
-                            else:
-                                console.print(f"[yellow]Warning: {result.get('error', 'Unknown error')}[/yellow]")
+                        elif (
+                            result.get("error")
+                            and "not found" in result["error"].lower()
+                        ):
+                            console.print(
+                                f"[yellow]Study '{study_config.study_name}' not found in PostgreSQL storage, nothing to delete[/yellow]"
+                            )
+                        else:
+                            console.print(
+                                f"[yellow]Warning: {result.get('error', 'Unknown error')}[/yellow]"
+                            )
                     else:
-                        console.print(f"[yellow]No database URL configured, nothing to delete[/yellow]")
-                
+                        console.print(
+                            "[yellow]No database URL configured, nothing to delete[/yellow]"
+                        )
+
                 # Also clean up Helm releases associated with this study (for Helm backend)
                 if backend.lower() == "helm":
-                    namespace = k8s_namespace or (study_config.helm_config.namespace if study_config.helm_config else "default")
+                    namespace = k8s_namespace or (
+                        study_config.helm_config.namespace
+                        if study_config.helm_config
+                        else "default"
+                    )
                     try:
                         import subprocess
+
                         # List all Helm releases in namespace
                         result = subprocess.run(
                             ["helm", "list", "-n", namespace, "-q"],
@@ -314,23 +378,39 @@ def optimize_command(
                             text=True,
                         )
                         if result.returncode == 0:
-                            releases = result.stdout.strip().split("\n") if result.stdout.strip() else []
+                            releases = (
+                                result.stdout.strip().split("\n")
+                                if result.stdout.strip()
+                                else []
+                            )
                             # Find releases that start with study name
-                            study_releases = [r for r in releases if r.startswith(study_config.study_name)]
+                            study_releases = [
+                                r
+                                for r in releases
+                                if r.startswith(study_config.study_name)
+                            ]
                             if study_releases:
-                                console.print(f"[yellow]Cleaning up {len(study_releases)} Helm release(s) for study[/yellow]")
+                                console.print(
+                                    f"[yellow]Cleaning up {len(study_releases)} Helm release(s) for study[/yellow]"
+                                )
                                 for release in study_releases:
                                     subprocess.run(
                                         ["helm", "uninstall", release, "-n", namespace],
                                         capture_output=True,
                                         text=True,
                                     )
-                                console.print(f"[green]✅ Cleaned up Helm releases[/green]")
+                                console.print(
+                                    "[green]✅ Cleaned up Helm releases[/green]"
+                                )
                     except Exception as e:
-                        console.print(f"[yellow]Warning: Could not clean up Helm releases: {e}[/yellow]")
-                
+                        console.print(
+                            f"[yellow]Warning: Could not clean up Helm releases: {e}[/yellow]"
+                        )
+
             except Exception as e:
-                console.print(f"[yellow]Warning: Could not delete existing study: {e}[/yellow]")
+                console.print(
+                    f"[yellow]Warning: Could not delete existing study: {e}[/yellow]"
+                )
                 console.print("[yellow]Continuing with study creation...[/yellow]")
 
         # Save config file to study folder
@@ -357,7 +437,7 @@ def optimize_command(
                 )
         elif backend.lower() == "helm":
             from ..execution.backends import HelmExecutionBackend
-            
+
             # Build Helm config from CLI args or study config
             helm_config = {}
             if study_config.helm_config:
@@ -378,7 +458,7 @@ def optimize_command(
                     "gaie_values_template": study_config.helm_config.gaie_values_template,
                     "model_pvc": study_config.helm_config.model_pvc,
                 }
-            
+
             # Override with CLI args if provided
             if helm_chart_path:
                 helm_config["chart_path"] = helm_chart_path
@@ -388,10 +468,18 @@ def optimize_command(
                 helm_config["chart_name"] = helm_chart_name
             if helm_chart_version:
                 helm_config["chart_version"] = helm_chart_version
-            
-            namespace = k8s_namespace or (study_config.helm_config.namespace if study_config.helm_config else "default")
-            kubeconfig_path = kubeconfig or (study_config.helm_config.kubeconfig if study_config.helm_config else None)
-            
+
+            namespace = k8s_namespace or (
+                study_config.helm_config.namespace
+                if study_config.helm_config
+                else "default"
+            )
+            kubeconfig_path = kubeconfig or (
+                study_config.helm_config.kubeconfig
+                if study_config.helm_config
+                else None
+            )
+
             execution_backend = HelmExecutionBackend(
                 study_name=study_config.study_name,
                 helm_config=helm_config,
@@ -402,7 +490,7 @@ def optimize_command(
             console.print(f"[blue]Namespace: {namespace}[/blue]")
         elif backend.lower() == "k8s" or backend.lower() == "kubernetes":
             from ..execution.backends import KubernetesExecutionBackend
-            
+
             # Get Kubernetes config from study config
             k8s_config = {}
             if study_config.k8s_config:
@@ -416,10 +504,16 @@ def optimize_command(
                     "model_pvc": study_config.k8s_config.model_pvc,
                     "benchmark_pvc": study_config.k8s_config.benchmark_pvc,
                 }
-            
-            namespace = k8s_namespace or (study_config.k8s_config.namespace if study_config.k8s_config else "default")
-            kubeconfig_path = kubeconfig or (study_config.k8s_config.kubeconfig if study_config.k8s_config else None)
-            
+
+            namespace = k8s_namespace or (
+                study_config.k8s_config.namespace
+                if study_config.k8s_config
+                else "default"
+            )
+            kubeconfig_path = kubeconfig or (
+                study_config.k8s_config.kubeconfig if study_config.k8s_config else None
+            )
+
             execution_backend = KubernetesExecutionBackend(
                 study_name=study_config.study_name,
                 k8s_config=k8s_config,
@@ -441,11 +535,14 @@ def optimize_command(
         final_max_concurrent_trials = (
             max_concurrent_trials or study_config.optimization.max_concurrent_trials
         )
-        
+
         # Helm and Kubernetes backends do not support parallel trials
         if backend.lower() in ("helm", "k8s", "kubernetes"):
             backend_name = "Helm" if backend.lower() == "helm" else "Kubernetes"
-            if final_max_concurrent_trials is not None and final_max_concurrent_trials > 1:
+            if (
+                final_max_concurrent_trials is not None
+                and final_max_concurrent_trials > 1
+            ):
                 console.print(
                     "[bold red]"
                     f"❌ {backend_name} backend does not support parallel trials. "
@@ -466,7 +563,7 @@ def optimize_command(
                 f"⚠️  {backend_name} backend: Using max_concurrent_trials=1 (parallel trials not supported)"
                 "[/yellow]"
             )
-        
+
         if final_max_concurrent_trials is None:
             console.print(
                 "[bold red]"
@@ -474,10 +571,7 @@ def optimize_command(
                 "(or set optimization.max_concurrent_trials in the config)"
                 "[/bold red]"
             )
-            console.print(
-                "YAML:\n  optimization:\n"
-                "    max_concurrent_trials: 2"
-            )
+            console.print("YAML:\n  optimization:\n    max_concurrent_trials: 2")
             raise typer.Exit(1)
         if final_max_concurrent_trials < 1:
             console.print(
@@ -596,38 +690,36 @@ def run_optimization_sync(
     controller = StudyController.create_from_config(
         backend, config, create_db=create_db
     )
-    
+
     # Store controller reference for signal handler
     _cleanup_controller = controller
-    
+
     def signal_handler(signum, frame):
         """Handle SIGINT/SIGTERM to ensure cleanup."""
-        # #region agent log
-        import json
-        import time
-        with open("/home/thibrahi/workspace/auto-tune/llm-d-integration/.cursor/debug.log", "a") as f:
-            f.write(json.dumps({"sessionId":"debug-session","runId":"signal-handler","hypothesisId":"SIGNAL","location":"main.py:signal_handler","message":"Signal received","data":{"signum":signum},"timestamp":int(time.time()*1000)})+"\n")
-        # #endregion
-        
-        logger.warning(
-            f"Signal {signum} received. Initiating cleanup..."
-        )
+        # #region agent log - DISABLED
+        # import json
+        # import time
+        # with open("/home/thibrahi/workspace/auto-tune/llm-d-integration/.cursor/debug.log", "a") as f:
+        #     f.write(json.dumps({"sessionId":"debug-session","runId":"signal-handler","hypothesisId":"SIGNAL","location":"main.py:signal_handler","message":"Signal received","data":{"signum":signum},"timestamp":int(time.time()*1000)})+"\n")
+        # DEBUG DISABLED: #endregion
+
+        logger.warning(f"Signal {signum} received. Initiating cleanup...")
         console.print(
             f"\n[yellow]⚠️  Signal {signum} received. "
             "Cleaning up active trials...[/yellow]"
         )
-        
+
         try:
             # Force cleanup via backend
-            if hasattr(controller, 'backend') and controller.backend:
+            if hasattr(controller, "backend") and controller.backend:
                 controller.backend.cleanup_all_trials()
                 controller.backend.shutdown()
         except Exception as e:
             logger.error(f"Error during signal handler cleanup: {e}", exc_info=True)
-        
+
         # Re-raise KeyboardInterrupt to trigger normal cleanup flow
         raise KeyboardInterrupt(f"Signal {signum} received")
-    
+
     # Register signal handlers
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
@@ -663,8 +755,7 @@ def run_optimization_sync(
             # User interrupted with Ctrl+C
             progress.update(task, description="⚠️  Optimization interrupted by user")
             logger.warning(
-                "Keyboard interrupt received (Ctrl+C). "
-                "Initiating graceful shutdown..."
+                "Keyboard interrupt received (Ctrl+C). Initiating graceful shutdown..."
             )
             console.print(
                 "\n[yellow]⚠️  Interrupt signal received. "
@@ -672,7 +763,7 @@ def run_optimization_sync(
             )
             # Ensure cleanup happens even if exception is caught
             try:
-                if hasattr(controller, 'backend') and controller.backend:
+                if hasattr(controller, "backend") and controller.backend:
                     controller.backend.cleanup_all_trials()
             except Exception as cleanup_e:
                 logger.error(f"Error during cleanup: {cleanup_e}", exc_info=True)
@@ -1187,11 +1278,14 @@ def resume_command(
         final_max_concurrent_trials = (
             max_concurrent_trials or study_config.optimization.max_concurrent_trials
         )
-        
+
         # Helm and Kubernetes backends do not support parallel trials
         if backend.lower() in ("helm", "k8s", "kubernetes"):
             backend_name = "Helm" if backend.lower() == "helm" else "Kubernetes"
-            if final_max_concurrent_trials is not None and final_max_concurrent_trials > 1:
+            if (
+                final_max_concurrent_trials is not None
+                and final_max_concurrent_trials > 1
+            ):
                 console.print(
                     "[bold red]"
                     f"❌ {backend_name} backend does not support parallel trials. "
@@ -1212,7 +1306,7 @@ def resume_command(
                 f"⚠️  {backend_name} backend: Using max_concurrent_trials=1 (parallel trials not supported)"
                 "[/yellow]"
             )
-        
+
         if n_trials or n_total_trials:  # Only required if we will run new trials
             if final_max_concurrent_trials is None:
                 console.print(
@@ -1222,15 +1316,12 @@ def resume_command(
                     "[/bold red]"
                 )
                 console.print(
-                    "Set CLI flag or config: "
-                    "optimization.max_concurrent_trials"
+                    "Set CLI flag or config: optimization.max_concurrent_trials"
                 )
                 raise typer.Exit(1)
             if final_max_concurrent_trials < 1:
                 console.print(
-                    "[bold red]"
-                    "❌ --max-concurrent-trials must be >= 1"
-                    "[/bold red]"
+                    "[bold red]❌ --max-concurrent-trials must be >= 1[/bold red]"
                 )
                 raise typer.Exit(1)
         resume_study_sync(
@@ -1535,7 +1626,6 @@ def check_environment_command(
 def _check_ray_cluster_environment():
     """Check environment on all Ray cluster nodes."""
     try:
-
         if not ray.is_initialized():
             console.print("[yellow]Initializing Ray connection...[/yellow]")
             ray.init(address="auto")

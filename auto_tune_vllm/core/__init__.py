@@ -7,7 +7,7 @@ from .trial import TrialConfig, TrialResult
 __all__ = [
     "StudyController",
     "StudyConfig",
-    "ParameterConfig", 
+    "ParameterConfig",
     "TrialConfig",
     "TrialResult",
 ]

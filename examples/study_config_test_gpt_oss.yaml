@@ -3,7 +3,7 @@
 # Simpler than Helm backend - creates Deployments and Services directly
 
 study:
-  prefix: "mlperf_server_k8s_direct"
+  prefix: "autotune_test_gpt_oss"
   database_url: "postgresql://postgres:postgres@localhost:5432/optuna-k8s-direct"
   # For Kubernetes: Use port-forwarding or cluster-internal database URL
   # Example with port-forward: kubectl port-forward -n <namespace> svc/postgresql 5432:5432
@@ -14,7 +14,7 @@ execution:
   k8s:
     namespace: "autotune-aanya"  # Kubernetes namespace for deployments
     vllm_image: "vllm/vllm-openai:latest"  # vLLM container image
-    benchmark_image: "quay.io/rh-ee-aansharm/mlperf-6.0:harness-updated-amd64"  # MLPerf harness image - UPDATED with MLflow + v4 dataset (AMD64 only)
+    benchmark_image: "quay.io/rh-ee-aansharm/mlperf-6.0@sha256:ac63fa7a124c6901ce6538f7f1fd52ef6d7c328a1bbd300fbe187d2104901b8b"
     service_type: "ClusterIP"  # Service type: ClusterIP, NodePort, or LoadBalancer
     service_port: 8000  # Service port for vLLM server
     kubeconfig: "/Users/aansharm/.kube/config"  # Optional: custom kubeconfig path
@@ -42,15 +42,16 @@ optimization:
 benchmark:
   # Constants: fixed values for all trials
   benchmark_type: "mlperf"
-  model: "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8"  # Llama 3.1 8B FP8 model (on PVC)
+  model: "openai/gpt-oss-120b"  # GPT-OSS 120B model (on PVC)
   scenario: "Offline"  # MLPerf Offline scenario
-  dataset_path: "/mnt/models/datasets/llama3.1-8b-cnn/cnn_eval.json"  # CNN eval dataset (on PVC)
-  lg_model_name: "llama3_1-8b"  # LoadGen model name for Llama 3.1 8B
-  num_samples: 100 #13368  # Full dataset: 13,368 samples
-  output_dir: "/tmp/LLAMA-3.1-8B-OFFLINE"  # Output directory for results
-  mlflow_experiment_name: "mlperf-llama3_1-8b-offline"  # MLflow experiment name
+  dataset_path: "/vllm-workspace/mlperf-inference-6.0-redhat/harness/data/v4/perf_eval_ref.parquet"  # v4 dataset (in container)
+  lg_model_name: "gpt-oss-120b"  # LoadGen model name for GPT-OSS
+  num_samples: 6396  # Full MLPerf dataset (all samples)
+  output_dir: "/mnt/results/harness-output"  # Output directory for results (on PVC to preserve error logs)
+  mlflow_experiment_name: "autotune-gpt-oss-120b-offline"  # MLflow experiment name
   mlflow_host: "150.239.115.202"  # MLflow host address (must be accessible from pods)
-  test_mode: "performance"  # Test mode: performance or accuracy         
+  test_mode: "performance"  # Test mode: performance or accuracy
+  max_seconds: 5400  # 90 minutes for 6396 samples (based on 1hr actual runtime + margin, timeout = 5400 * 1.5 = 8100s = 2.25 hours)
   # Tunables: optimized by Optuna
   tunables: {}  # Empty - no tunables for Offline scenario
 
@@ -86,5 +87,5 @@ parameters:
 
 # Static parameters (applied to all trials)
 static_parameters:
-  tensor_parallel_size: 8  # Use 1 GPU per trial
-  max_model_len: 16384
+  tensor_parallel_size: 8  # Use 8 GPU per trial
+  max_model_len: 131072  # Full GPT-OSS context length (required for MLPerf dataset)

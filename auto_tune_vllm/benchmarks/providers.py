@@ -27,18 +27,15 @@ class BenchmarkProvider(ABC):
         self._process_pid = None  # Store PID for cleanup even if process handle is gone
         self._process_pgid = None  # Store process group ID for cleanup
         self._cancellation_flag = None  # Function to check for cancellation
-    
+
     def set_logger(self, custom_logger):
         """Set a custom logger for this benchmark provider."""
         self._logger = custom_logger
 
     def set_trial_context(self, study_name: str, trial_id: str):
         """Set trial context for benchmark result storage."""
-        self._trial_context = {
-            'study_name': study_name,
-            'trial_id': trial_id
-        }
-    
+        self._trial_context = {"study_name": study_name, "trial_id": trial_id}
+
     def terminate_benchmark(self):
         """Terminate the running benchmark process and its process group if active."""
         # Try to use stored PID/PGID first, in case process handle is gone
@@ -46,16 +43,15 @@ class BenchmarkProvider(ABC):
         if pid is None:  # first check, if PID is still none after this we will return
             pid = self._process.pid if self._process else None
         pgid = self._process_pgid
-        
+
         if pid is None:
             self._logger.debug("Benchmark: No benchmark process to terminate")
             return
-            
+
         self._logger.info(
-            f"Benchmark: Terminating benchmark process {pid} "
-            f"and its process group..."
+            f"Benchmark: Terminating benchmark process {pid} and its process group..."
         )
-        
+
         # Try to get process group ID if we don't have it
         if pgid is None:
             try:
@@ -65,7 +61,7 @@ class BenchmarkProvider(ABC):
                 self._logger.debug(
                     f"Benchmark: Process {pid} already gone or no process group"
                 )
-        
+
         # Try graceful shutdown with SIGTERM first
         try:
             if pgid is not None:
@@ -83,7 +79,7 @@ class BenchmarkProvider(ABC):
             self._process_pid = None
             self._process_pgid = None
             return
-        
+
         # Wait for graceful shutdown
         # (use a shorter timeout if process handle unavailable)
         wait_timeout = 5 if self._process else 2
@@ -93,6 +89,7 @@ class BenchmarkProvider(ABC):
             else:
                 # Wait by polling if no process handle
                 import time
+
                 for _ in range(int(wait_timeout * 10)):
                     try:
                         os.kill(pid, 0)  # Check if process exists
@@ -103,7 +100,7 @@ class BenchmarkProvider(ABC):
                 else:
                     # Timeout - process still exists
                     raise subprocess.TimeoutExpired(None, wait_timeout)
-                    
+
             self._logger.info(
                 f"Benchmark: ✓ Process {pid} terminated gracefully via SIGTERM"
             )
@@ -112,7 +109,7 @@ class BenchmarkProvider(ABC):
                 f"Benchmark: Process {pid} did not terminate within {wait_timeout}s. "
                 f"Escalating to SIGKILL..."
             )
-            
+
             # Force kill with SIGKILL
             try:
                 if pgid is not None:
@@ -190,7 +187,7 @@ class GuideLLMBenchmark(BenchmarkProvider):
     ) -> subprocess.Popen:
         """
         Start GuideLLM benchmark subprocess (non-blocking).
-        
+
         Returns:
             Popen process handle for polling by caller
         """
@@ -201,7 +198,7 @@ class GuideLLMBenchmark(BenchmarkProvider):
 
         # Build GuideLLM command
         cmd = self._build_guidellm_command(model_url, config, self._results_file)
-        
+
         # Validate binary and basic inputs
         import shutil
 
@@ -210,17 +207,13 @@ class GuideLLMBenchmark(BenchmarkProvider):
                 "GuideLLM CLI not found on PATH. "
                 "Please install or provide the full path."
             )
-        if not (
-            model_url.startswith("http://") or model_url.startswith("https://")
-        ):
-            raise ValueError(
-                f"Invalid model_url: {model_url!r} (expected http/https)"
-            )
+        if not (model_url.startswith("http://") or model_url.startswith("https://")):
+            raise ValueError(f"Invalid model_url: {model_url!r} (expected http/https)")
 
         # Run GuideLLM
         self._logger.info(f"Running: {' '.join(cmd)}")
         self._logger.info(f"Results will be saved to: {self._results_file}")
-        
+
         # Use Popen so we can terminate if vLLM dies
         # start_new_session=True puts it in its own process group for clean
         # termination
@@ -233,9 +226,9 @@ class GuideLLMBenchmark(BenchmarkProvider):
             stderr=subprocess.PIPE,
             text=True,
             env=env,
-            start_new_session=True
+            start_new_session=True,
         )
-        
+
         # Store PID and PGID immediately for cleanup, even if process handle is lost
         self._process_pid = self._process.pid
         try:
@@ -246,25 +239,24 @@ class GuideLLMBenchmark(BenchmarkProvider):
             )
         except (OSError, ProcessLookupError):
             self._logger.warning(
-                f"Failed to get process group for GuideLLM process "
-                f"{self._process_pid}"
+                f"Failed to get process group for GuideLLM process {self._process_pid}"
             )
             self._process_pgid = None
-        
+
         return self._process
 
     def parse_results(self) -> Dict[str, Any]:
         """
         Parse GuideLLM benchmark results from output file.
-        
+
         Returns:
             Dictionary with benchmark metrics
         """
         results_file = self._results_file
-        
+
         if not os.path.exists(results_file):
             raise RuntimeError(f"GuideLLM results file not found: {results_file}")
-        
+
         try:
             with open(results_file) as f:
                 data = json.load(f)
@@ -337,7 +329,7 @@ class GuideLLMBenchmark(BenchmarkProvider):
             "--output-path",
             results_file,
             "--processor-args",
-            '{"trust-remote-code":"true"}'
+            '{"trust-remote-code":"true"}',
         ]
 
         # Add dataset or synthetic data configuration
@@ -346,7 +338,7 @@ class GuideLLMBenchmark(BenchmarkProvider):
             data_config = {
                 "prompt_tokens": config.prompt_tokens,
                 "output_tokens": config.output_tokens,
-                "samples": config.samples
+                "samples": config.samples,
             }
 
             # Only add statistical distribution parameters if they were explicitly
@@ -463,7 +455,7 @@ class MLPerfBenchmark(BenchmarkProvider):
     ) -> subprocess.Popen:
         """
         Start MLPerf harness benchmark subprocess (non-blocking).
-        
+
         Returns:
             Popen process handle for polling by caller
         """
@@ -474,14 +466,10 @@ class MLPerfBenchmark(BenchmarkProvider):
 
         # Build MLPerf command
         cmd = self._build_mlperf_command(model_url, config, self._results_file)
-        
+
         # Validate basic inputs
-        if not (
-            model_url.startswith("http://") or model_url.startswith("https://")
-        ):
-            raise ValueError(
-                f"Invalid model_url: {model_url!r} (expected http/https)"
-            )
+        if not (model_url.startswith("http://") or model_url.startswith("https://")):
+            raise ValueError(f"Invalid model_url: {model_url!r} (expected http/https)")
 
         # Validate required MLPerf fields
         if config.scenario is None:
@@ -496,7 +484,7 @@ class MLPerfBenchmark(BenchmarkProvider):
         # Run MLPerf harness
         self._logger.info(f"Running: {' '.join(cmd)}")
         self._logger.info(f"Results will be saved to: {self._results_file}")
-        
+
         # Use Popen so we can terminate if vLLM dies
         # start_new_session=True puts it in its own process group for clean
         # termination
@@ -508,9 +496,9 @@ class MLPerfBenchmark(BenchmarkProvider):
             stderr=subprocess.PIPE,
             text=True,
             env=env,
-            start_new_session=True
+            start_new_session=True,
         )
-        
+
         # Store PID and PGID immediately for cleanup, even if process handle is lost
         self._process_pid = self._process.pid
         try:
@@ -521,35 +509,46 @@ class MLPerfBenchmark(BenchmarkProvider):
             )
         except (OSError, ProcessLookupError):
             self._logger.warning(
-                f"Failed to get process group for MLPerf process "
-                f"{self._process_pid}"
+                f"Failed to get process group for MLPerf process {self._process_pid}"
             )
             self._process_pgid = None
-        
+
         return self._process
 
     def parse_results(self) -> Dict[str, Any]:
         """
         Parse MLPerf harness benchmark results from output file.
-        
+
+        For Kubernetes backend, the results file is created by the benchmark wrapper
+        which parses mlperf_log_summary.txt and extracts the key metrics.
+
+        For local backend, the results file should be created similarly after
+        the MLPerf harness completes.
+
         Returns:
-            Dictionary with benchmark metrics
+            Dictionary with benchmark metrics including output_tokens_per_second
         """
         results_file = self._results_file
-        
+
         if not os.path.exists(results_file):
             raise RuntimeError(f"MLPerf results file not found: {results_file}")
-        
+
         try:
             with open(results_file) as f:
                 data = json.load(f)
         except json.JSONDecodeError as e:
             raise RuntimeError(f"Invalid JSON in results file: {e}")
 
-        # Placeholder: Return raw JSON data for now
-        # Actual parsing will be implemented separately
-        self._logger.warning(
-            "MLPerf results parsing not yet implemented. Returning raw JSON data."
+        # Validate required metric for optimization
+        if "output_tokens_per_second" not in data:
+            raise RuntimeError(
+                f"Required metric 'output_tokens_per_second' not found "
+                f"in MLPerf results. Available keys: {list(data.keys())}"
+            )
+
+        output_tps = data['output_tokens_per_second']
+        self._logger.info(
+            f"Parsed MLPerf results: output_tokens_per_second={output_tps}"
         )
         return data
 
@@ -598,6 +597,7 @@ class MLPerfBenchmark(BenchmarkProvider):
         """Build MLPerf harness command arguments."""
         cmd = [
             "python3",
+            "-u",  # Unbuffered output to ensure errors are logged before crash
             "harness/harness_main.py",
             "--model",
             config.model,
@@ -613,6 +613,10 @@ class MLPerfBenchmark(BenchmarkProvider):
             str(config.num_samples),
             "--api-server-url",
             model_url,
+            "--user-conf",
+            "user.conf",
+            "--backend",
+            "vllm",
         ]
 
         # Add optional parameters
@@ -622,10 +626,17 @@ class MLPerfBenchmark(BenchmarkProvider):
             cmd.extend(["--mlflow-experiment-name", config.mlflow_experiment_name])
         if config.mlflow_host:
             cmd.extend(["--mlflow-host", config.mlflow_host])
+        if config.enable_metrics:
+            cmd.append("--enable-metrics")
+        if config.tensor_parallel_size is not None:
+            cmd.extend(["--mlflow-description", f"TP={config.tensor_parallel_size}"])
 
         # Scenario-specific parameters
         if config.scenario == "Offline":
-            if config.num_samples is not None and config.num_samples != config.num_samples:
+            if (
+                config.num_samples is not None
+                and config.num_samples != config.num_samples
+            ):
                 raise ValueError(
                     "num_samples must be equal to batch_size for Offline scenario"
                 )
@@ -638,8 +649,15 @@ class MLPerfBenchmark(BenchmarkProvider):
                     "server_target_qps must be specified for Server scenario"
                 )
             cmd.extend(["--server-target-qps", str(config.server_target_qps)])
-            if config.server_coalesce_queries:
-                cmd.append("--server-coalesce-queries")
+            if config.server_coalesce_queries is not None:
+                cmd.extend(
+                    [
+                        "--server-coalesce-queries",
+                        str(config.server_coalesce_queries).lower(),
+                    ]
+                )
+            if config.num_workers is not None:
+                cmd.extend(["--num-workers", str(config.num_workers)])
 
         self._logger.info(f"MLPerf command: {' '.join(cmd)}")
 
@@ -657,7 +675,7 @@ class CustomBenchmarkTemplate(BenchmarkProvider):
 
         Override this method to start your custom benchmark subprocess.
         Should return a Popen process handle for the caller to poll.
-        
+
         Example:
             cmd = ["your-benchmark-tool", "--url", model_url, ...]
             self._process = subprocess.Popen(
@@ -680,7 +698,7 @@ class CustomBenchmarkTemplate(BenchmarkProvider):
         Override this method to parse your benchmark output file.
         The returned dictionary should contain metrics that will be used
         to compute objective values for Optuna optimization.
-        
+
         Example:
             with open(self._results_file) as f:
                 data = json.load(f)
@@ -708,4 +726,3 @@ BENCHMARK_PROVIDERS = {
     "mlperf": MLPerfBenchmark,
     "custom_template": CustomBenchmarkTemplate,
 }
-

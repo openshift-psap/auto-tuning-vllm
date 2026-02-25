@@ -9,7 +9,7 @@ spec:
   restartPolicy: Never
   containers:
     - name: readiness-check
-      image: curlimages/curl:latest
+      image: quay.io/rh-ee-aansharm/curl:latest  # Using quay.io to avoid Docker Hub rate limits
       command: ["/bin/sh", "-c"]
       args:
         - |
