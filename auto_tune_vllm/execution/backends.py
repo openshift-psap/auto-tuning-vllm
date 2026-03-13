@@ -13,17 +13,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-import ray
-
 from ..core.trial import TrialConfig, TrialResult
 
 logger = logging.getLogger(__name__)
 
 
-# Simple Ray actor to hold cancellation state that can be modified externally
-
-@ray.remote
-class CancellationFlag:
+# Lightweight actor class for Ray cancellation state (wrapped with ray.remote
+# only when RayExecutionBackend is used, so local backend works without Ray)
+class _CancellationFlag:
     """Lightweight Ray actor to hold mutable cancellation state."""
 
     def __init__(self):
@@ -37,6 +34,7 @@ class CancellationFlag:
     def is_cancelled(self):
         """Check if cancellation was requested."""
         return self.cancelled
+
 
 @dataclass
 class JobHandle:
@@ -80,7 +78,7 @@ class ExecutionBackend(ABC):
 
 class RayExecutionBackend(ExecutionBackend):
     """Ray-based distributed execution backend."""
-    
+
     # Cleanup timeouts (in seconds)
     CANCELLATION_FLAG_TIMEOUT = 2
     CANCELLATION_DETECTION_WAIT = 5
@@ -111,6 +109,15 @@ class RayExecutionBackend(ExecutionBackend):
         self.venv_path = venv_path
         self.conda_env = conda_env
 
+        try:
+            import ray
+        except ImportError as e:
+            msg = (
+                "Ray is required for the Ray execution backend. "
+                "Install with: pip install 'auto-tune-vllm[ray]'"
+            )
+            raise ImportError(msg) from e
+        self._ray = ray
         self._ensure_ray_initialized()
 
     def _build_runtime_env(self) -> Dict:
@@ -173,6 +180,7 @@ class RayExecutionBackend(ExecutionBackend):
 
     def _ensure_ray_initialized(self):
         """Initialize Ray if not already initialized."""
+        ray = self._ray
         try:
             if not ray.is_initialized():
                 try:
@@ -227,7 +235,7 @@ class RayExecutionBackend(ExecutionBackend):
             time.sleep(3)
 
             # Connect to the newly started Ray head using auto-discovery
-            ray.init(address="auto", ignore_reinit_error=True)
+            self._ray.init(address="auto", ignore_reinit_error=True)
             self._started_ray_head = True
 
         except subprocess.CalledProcessError as e:
@@ -243,7 +251,8 @@ class RayExecutionBackend(ExecutionBackend):
 
         # Create a lightweight cancellation flag actor (separate from trial actor)
         # This can be called even while the trial actor is busy
-        cancellation_flag_actor = CancellationFlag.remote()
+        CancellationFlagActor = self._ray.remote(_CancellationFlag)
+        cancellation_flag_actor = CancellationFlagActor.remote()
 
         # Create Ray actor with resource requirements from trial config
         # Extract num_gpus and num_cpus from trial's resource_requirements
@@ -289,6 +298,7 @@ class RayExecutionBackend(ExecutionBackend):
         self, job_handles: List[JobHandle]
     ) -> Tuple[List[TrialResult], List[JobHandle]]:
         """Poll for completed Ray trials."""
+        ray = self._ray
         if not job_handles:
             return [], []
 
@@ -306,9 +316,7 @@ class RayExecutionBackend(ExecutionBackend):
             return [], job_handles
 
         # Check which trials are ready (non-blocking)
-        ready_refs, _ = ray.wait(
-            active_refs, num_returns=len(active_refs), timeout=0
-        )
+        ready_refs, _ = ray.wait(active_refs, num_returns=len(active_refs), timeout=0)
 
         completed_results = []
         remaining_handles = []
@@ -318,7 +326,7 @@ class RayExecutionBackend(ExecutionBackend):
 
             if ray_ref in ready_refs:
                 try:
-                    result = ray.get(ray_ref)  # Get completed result
+                    result = ray.get(ray_ref)
                     completed_results.append(result)
                     logger.info(f"Completed trial {handle.trial_id}")
                     # Remove from active jobs and actors
@@ -352,12 +360,12 @@ class RayExecutionBackend(ExecutionBackend):
         self, items: dict, method_name: str, description: str
     ) -> list:
         """Execute remote method calls on multiple actors/refs with error handling.
-        
+
         Args:
             items: Dict of job_id -> actor/ref
             method_name: Name of remote method to call
             description: Description for logging
-            
+
         Returns:
             List of (job_id, remote_ref) tuples for successful calls
         """
@@ -376,27 +384,27 @@ class RayExecutionBackend(ExecutionBackend):
 
     def _wait_for_refs(self, futures: list, timeout: float, description: str) -> tuple:
         """Wait for remote refs to complete with timeout.
-        
+
         Returns:
             Tuple of (ready_count, remaining_count)
         """
         if not futures:
             return 0, 0
-        
+
+        ray = self._ray
         try:
             refs_only = [ref for _, ref in futures]
             ready_refs, remaining_refs = ray.wait(
                 refs_only, num_returns=len(refs_only), timeout=timeout
             )
-            
+
             if ready_refs:
                 logger.info(f"✓ {len(ready_refs)} {description} completed")
             if remaining_refs:
                 logger.warning(
-                    f"⚠ {len(remaining_refs)} {description} timed out "
-                    f"after {timeout}s"
+                    f"⚠ {len(remaining_refs)} {description} timed out after {timeout}s"
                 )
-            
+
             return len(ready_refs), len(remaining_refs)
         except Exception as e:
             logger.error(f"Error waiting for {description}: {e}")
@@ -404,7 +412,7 @@ class RayExecutionBackend(ExecutionBackend):
 
     def cleanup_all_trials(self):
         """Force cleanup of all active trials and their vLLM processes.
-        
+
         Cleanup phases:
         1. Set cancellation flags (triggers polling loop detection)
         2. Cancel Ray tasks (sends cancellation signal)
@@ -425,7 +433,7 @@ class RayExecutionBackend(ExecutionBackend):
         self._wait_for_refs(
             cancel_futures, self.CANCELLATION_FLAG_TIMEOUT, "cancellation flags"
         )
-        
+
         # Give polling loops time to detect and terminate benchmarks
         if cancel_futures:
             logger.info(
@@ -433,8 +441,9 @@ class RayExecutionBackend(ExecutionBackend):
                 f"to detect cancellation..."
             )
             time.sleep(self.CANCELLATION_DETECTION_WAIT)
-        
+
         # Phase 2: Cancel Ray tasks
+        ray = self._ray
         logger.info("Phase 2 - Cancelling Ray tasks...")
         cancelled = 0
         for job_id, task_ref in self.active_jobs.items():
@@ -443,36 +452,34 @@ class RayExecutionBackend(ExecutionBackend):
                 cancelled += 1
             except Exception as e:
                 logger.warning(f"Failed to cancel task {job_id}: {e}")
-        
+
         if cancelled:
             logger.info(
                 f"Cancelled {cancelled} Ray task(s), waiting "
                 f"{self.TASK_CANCELLATION_WAIT}s..."
             )
             time.sleep(self.TASK_CANCELLATION_WAIT)
-        
+
         # Phase 3: Call cleanup_resources on actors
         logger.info("Phase 3 - Requesting graceful cleanup from actors...")
         cleanup_futures = self._execute_remote_calls(
             self.active_actors, "cleanup_resources", "Sent cleanup request"
         )
         logger.info(
-            f"Waiting up to {self.GRACEFUL_CLEANUP_TIMEOUT}s "
-            f"for graceful cleanup..."
+            f"Waiting up to {self.GRACEFUL_CLEANUP_TIMEOUT}s for graceful cleanup..."
         )
         self._wait_for_refs(
             cleanup_futures, self.GRACEFUL_CLEANUP_TIMEOUT, "actor cleanups"
         )
-        
+
         # Phase 4: Force kill unresponsive actors
         if self.active_actors:
             logger.warning(
-                f"Force killing {len(self.active_actors)} "
-                f"unresponsive actor(s)..."
+                f"Force killing {len(self.active_actors)} unresponsive actor(s)..."
             )
             for job_id, actor in list(self.active_actors.items()):
                 try:
-                    ray.kill(actor)
+                    self._ray.kill(actor)
                     logger.debug(f"Force killed actor {job_id}")
                 except Exception as e:
                     logger.warning(f"Failed to kill actor {job_id}: {e}")
@@ -485,7 +492,7 @@ class RayExecutionBackend(ExecutionBackend):
 
     def shutdown(self):
         """Shutdown Ray cluster connection."""
-
+        ray = self._ray
         if ray.is_initialized():
             ray.shutdown()
             logger.info("Shutdown Ray cluster connection")
@@ -579,12 +586,30 @@ class LocalExecutionBackend(ExecutionBackend):
         return completed_results, remaining_handles
 
     def cleanup_all_trials(self):
-        """Cleanup all active trials (stub implementation for local backend)."""
-        logger.info("Local backend does not require explicit trial cleanup")
-        # Local backend doesn't need to do anything special here
-        # Individual trial controllers handle their own cleanup when they complete
+        """Force cleanup of all active local trials by cancelling running futures."""
+        if not self.active_futures:
+            logger.debug("No active local trials to cleanup")
+            return
+
+        logger.info(f"Cancelling {len(self.active_futures)} active local trial(s)")
+
+        # Cancel all running futures
+        for job_id, future in list(self.active_futures.items()):
+            try:
+                if not future.done():
+                    future.cancel()
+                    logger.debug(f"Cancelled local trial {job_id}")
+            except Exception as e:
+                logger.warning(f"Failed to cancel local trial {job_id}: {e}")
+
+        # Clear the tracking collection
+        self.active_futures.clear()
+        logger.info("Completed cleanup of all active local trials")
 
     def shutdown(self):
         """Shutdown thread pool executor."""
-        self.executor.shutdown(wait=True)
+        # Cancel any remaining active futures first
+        self.cleanup_all_trials()
+        # Shutdown without waiting for cancelled tasks to finish
+        self.executor.shutdown(wait=False)
         logger.info("Shutdown local execution backend")

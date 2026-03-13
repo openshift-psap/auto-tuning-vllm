@@ -11,8 +11,10 @@ from abc import ABC, abstractmethod
 from enum import Enum, auto
 from typing import Optional
 
-import ray
-from ray.exceptions import GetTimeoutError
+try:
+    import ray
+except ImportError:
+    ray = None  # type: ignore[assignment]
 
 from ..benchmarks.providers import BenchmarkProvider, GuideLLMBenchmark
 from ..core.trial import ExecutionInfo, TrialConfig, TrialResult
@@ -89,8 +91,10 @@ class BaseTrialController(TrialController):
             "vllm": "vLLM serving framework",
             "guidellm": "GuideLLM benchmarking tool",
             "optuna": "Optuna optimization framework",
-            "ray": "Ray distributed computing",
         }
+        # Ray only required when running as Ray worker (ray is installed and used)
+        if ray is not None:
+            required_packages["ray"] = "Ray distributed computing"
 
         # Only require psycopg2 if using PostgreSQL
         using_postgresql = False
@@ -141,9 +145,9 @@ class BaseTrialController(TrialController):
                 f"Ensure all dependencies are properly installed and available in PATH."
             )
 
-        # Check GPU availability using Ray cluster resources
+        # Check GPU availability using Ray cluster resources (when Ray is in use)
         try:
-            if ray.is_initialized():
+            if ray is not None and ray.is_initialized():
                 cluster_resources = ray.cluster_resources()
                 available_resources = ray.available_resources()
 
@@ -340,15 +344,14 @@ class BaseTrialController(TrialController):
 
                 Works with both Ray actor and local flag.
                 """
-                if cancellation_flag_actor:
+                if cancellation_flag_actor and ray is not None:
                     try:
                         # Use ray.get() with a small timeout to check cancellation
-                        # This ensures the remote call has time to complete
                         is_cancelled = ray.get(
                             cancellation_flag_actor.is_cancelled.remote(), timeout=0.2
                         )
                         return is_cancelled
-                    except (Exception, GetTimeoutError) as _:
+                    except Exception:
                         return False
                 return self._cancellation_requested
 
@@ -590,9 +593,9 @@ class BaseTrialController(TrialController):
             value = os.environ.get(var, "Not set")
             logger.info(f"{var}: {value}")
 
-        # Ray GPU resources and accelerator information
+        # Ray GPU resources and accelerator information (when Ray is in use)
         try:
-            if ray.is_initialized():
+            if ray is not None and ray.is_initialized():
                 cluster_resources = ray.cluster_resources()
                 available_resources = ray.available_resources()
 
@@ -651,7 +654,7 @@ class BaseTrialController(TrialController):
 
         # Ray worker info (if available)
         try:
-            if ray.is_initialized():
+            if ray is not None and ray.is_initialized():
                 runtime_ctx = ray.get_runtime_context()
                 logger.info(f"Ray node ID: {runtime_ctx.get_node_id()}")
                 logger.info(f"Ray worker ID: {runtime_ctx.get_worker_id()}")
@@ -1325,6 +1328,8 @@ class RayWorkerTrialController(BaseTrialController):
 
     def _get_worker_id(self) -> str:
         """Get Ray worker node ID."""
+        if ray is None:
+            return "ray_worker_unknown"
         try:
             return ray.get_runtime_context().get_node_id()
         except Exception:
@@ -1342,7 +1347,7 @@ class RayWorkerTrialController(BaseTrialController):
 
         # Log Ray worker context information
         try:
-            if ray.is_initialized():
+            if ray is not None and ray.is_initialized():
                 runtime_ctx = ray.get_runtime_context()
                 vllm_logger.info(f"Ray worker node: {runtime_ctx.get_node_id()[:8]}")
                 vllm_logger.info(
@@ -1366,17 +1371,24 @@ class RayWorkerTrialController(BaseTrialController):
         return super()._start_vllm_server(trial_config)
 
 
-# Ray remote actor wrapper
-@ray.remote
-class RayTrialActor(RayWorkerTrialController):
-    """Ray remote actor for distributed trial execution."""
+# Ray remote actor wrapper (only defined when Ray is installed)
+if ray is not None:
 
-    def run_trial(
-        self, trial_config: TrialConfig, cancellation_flag_actor=None
-    ) -> TrialResult:
-        """Run trial on Ray worker with optional cancellation flag actor."""
-        return super().run_trial(trial_config, cancellation_flag_actor)
+    @ray.remote
+    class RayTrialActor(RayWorkerTrialController):
+        """Ray remote actor for distributed trial execution."""
 
-    def __del__(self):
-        """Ensure cleanup on actor destruction."""
-        self.cleanup_resources()
+        def run_trial(
+            self, trial_config: TrialConfig, cancellation_flag_actor=None
+        ) -> TrialResult:
+            """Run trial on Ray worker with optional cancellation flag actor."""
+            return super().run_trial(trial_config, cancellation_flag_actor)
+
+        def __del__(self):
+            """Ensure cleanup on actor destruction (only on real instances)."""
+            # Skip when __del__ is run on the actor class proxy at process exit
+            if hasattr(self, "trial_loggers"):
+                self.cleanup_resources()
+
+else:
+    RayTrialActor = None  # type: ignore[misc, assignment]
