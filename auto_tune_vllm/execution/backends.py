@@ -247,14 +247,11 @@ class RayExecutionBackend(ExecutionBackend):
 
     def submit_trial(self, trial_config: TrialConfig) -> JobHandle:
         """Submit trial to Ray cluster."""
-        import ray
-
-        self._ray = ray
         from .trial_controller import RayTrialActor
 
         # Create a lightweight cancellation flag actor (separate from trial actor)
         # This can be called even while the trial actor is busy
-        CancellationFlagActor = ray.remote(_CancellationFlag)
+        CancellationFlagActor = self._ray.remote(_CancellationFlag)
         cancellation_flag_actor = CancellationFlagActor.remote()
 
         # Create Ray actor with resource requirements from trial config
@@ -589,12 +586,30 @@ class LocalExecutionBackend(ExecutionBackend):
         return completed_results, remaining_handles
 
     def cleanup_all_trials(self):
-        """Cleanup all active trials (stub implementation for local backend)."""
-        logger.info("Local backend does not require explicit trial cleanup")
-        # Local backend doesn't need to do anything special here
-        # Individual trial controllers handle their own cleanup when they complete
+        """Force cleanup of all active local trials by cancelling running futures."""
+        if not self.active_futures:
+            logger.debug("No active local trials to cleanup")
+            return
+
+        logger.info(f"Cancelling {len(self.active_futures)} active local trial(s)")
+
+        # Cancel all running futures
+        for job_id, future in list(self.active_futures.items()):
+            try:
+                if not future.done():
+                    future.cancel()
+                    logger.debug(f"Cancelled local trial {job_id}")
+            except Exception as e:
+                logger.warning(f"Failed to cancel local trial {job_id}: {e}")
+
+        # Clear the tracking collection
+        self.active_futures.clear()
+        logger.info("Completed cleanup of all active local trials")
 
     def shutdown(self):
         """Shutdown thread pool executor."""
-        self.executor.shutdown(wait=True)
+        # Cancel any remaining active futures first
+        self.cleanup_all_trials()
+        # Shutdown without waiting for cancelled tasks to finish
+        self.executor.shutdown(wait=False)
         logger.info("Shutdown local execution backend")
