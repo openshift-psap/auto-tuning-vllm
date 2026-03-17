@@ -174,15 +174,15 @@ class GuideLLMBenchmark(BenchmarkProvider):
         "output_tokens_per_second": "total",
         "requests_per_second": "total",
         "tokens_per_second": "total",
-        # Quality metrics - use 'successful' for performance characteristics
-        "request_latency": "successful",
-        "time_to_first_token_ms": "successful",
-        "inter_token_latency_ms": "successful",
-        "time_per_output_token_ms": "successful",
-        # Count metrics - use 'successful'
-        "output_token_count": "successful",
-        "prompt_token_count": "successful",
-        "request_concurrency": "successful",
+        # Quality metrics - use 'total' for all requests
+        "request_latency": "total",
+        "time_to_first_token_ms": "total",
+        "inter_token_latency_ms": "total",
+        "time_per_output_token_ms": "total",
+        # Count metrics - use 'total'
+        "output_token_count": "total",
+        "prompt_token_count": "total",
+        "request_concurrency": "total",
     }
 
     def start_benchmark(
@@ -337,8 +337,14 @@ class GuideLLMBenchmark(BenchmarkProvider):
             "--output-path",
             results_file,
             "--processor-args",
-            '{"trust-remote-code":"true"}'
+            '{"trust-remote-code":"true"}',
         ]
+
+        # Add request-type and request-formatter-kwargs only when configured
+        if config.request_formatter_kwargs is not None:
+            cmd.extend(["--request-formatter-kwargs", config.request_formatter_kwargs])
+        if config.request_type is not None:
+            cmd.extend(["--request-type", config.request_type])
 
         # Add dataset or synthetic data configuration
         if config.use_synthetic_data:

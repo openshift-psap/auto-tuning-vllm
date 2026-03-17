@@ -29,6 +29,10 @@ class BenchmarkConfig:
     output_tokens_min: Optional[int] = None
     output_tokens_max: Optional[int] = None
 
+    # GuideLLM request type and formatter kwargs - only added to command when set
+    request_type: Optional[str] = None  # e.g. "text_completions", "chat_completions"
+    request_formatter_kwargs: Optional[str] = None  # JSON string, e.g. '{"extras":{"include_reasoning":true}}'
+
     # Set in benchmark section of study config
     # Logging level for GuideLLM
     logging_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"

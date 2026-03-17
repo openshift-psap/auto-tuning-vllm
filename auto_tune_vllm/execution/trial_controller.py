@@ -71,6 +71,7 @@ class BaseTrialController(TrialController):
         self.benchmark_provider: Optional[BenchmarkProvider] = None
         self._environment_validated = False
         self.trial_loggers = {}  # Dict to hold trial-specific loggers
+        self._cleanup_done = False
         self._health_monitor_thread = None
         self._health_monitor_stop = False
         self._health_monitor_stop_event = None
@@ -245,7 +246,7 @@ class BaseTrialController(TrialController):
         """Flush any buffered logs for the trial to ensure all records are written."""
         try:
             # Flush trial-specific loggers if we have them
-            for component_logger in self.trial_loggers.values():
+            for component_logger in getattr(self, 'trial_loggers', {}).values():
                 for handler in component_logger.handlers:
                     try:
                         handler.flush()
@@ -1168,6 +1169,10 @@ class BaseTrialController(TrialController):
 
     def cleanup_resources(self):
         """Clean up vLLM server process and health monitoring."""
+        if getattr(self, '_cleanup_done', False):
+            return
+        self._cleanup_done = True
+
         # Use trial-specific logger if available, otherwise fall back to module logger
         controller_logger = self._get_trial_logger("controller")
 
@@ -1295,7 +1300,7 @@ class BaseTrialController(TrialController):
 
         # Flush all trial logs to ensure cleanup messages are written
         controller_logger.info("Trial Controller: Cleanup complete, flushing logs...")
-        for component_logger in self.trial_loggers.values():
+        for component_logger in getattr(self, 'trial_loggers', {}).values():
             for handler in component_logger.handlers:
                 try:
                     handler.flush()
