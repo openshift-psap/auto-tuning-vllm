@@ -18,6 +18,7 @@ from ..core.storage.postgres_utils import clear_study_data, verify_database_conn
 from ..core.study_controller import StudyController
 from ..execution.backends import RayExecutionBackend
 from ..logging.manager import CentralizedLogger, LogStreamer
+from ..utils.grid_cardinality import get_parameter_grid_cardinality
 
 # Setup rich console and app
 console = Console()
@@ -369,7 +370,40 @@ def run_optimization_sync(
     create_db: bool = False,
 ):
     """Synchronous optimization runner with progress display."""
-    # Create study controller
+    total_trials = n_trials or config.optimization.n_trials
+    cardinality = get_parameter_grid_cardinality(config)
+    if total_trials >= cardinality:
+        requested = total_trials
+        config.optimization.sampler = "grid"
+        config.optimization.n_trials = cardinality
+        config.optimization.n_startup_trials = min(
+            config.optimization.n_startup_trials, max(0, cardinality - 1)
+        )
+        n_trials = cardinality
+        total_trials = cardinality
+        console.print(
+            f"[yellow]n_trials ({requested}) meets or exceeds grid cardinality "
+            f"({cardinality}). "
+            "Search set to grid mode with n_trials = cardinality.[/yellow]"
+        )
+    elif (
+        config.optimization.sampler.lower() in ("tpe", "gp", "botorch")
+        and total_trials <= config.optimization.n_startup_trials
+    ):
+        startup_before = config.optimization.n_startup_trials
+        prev_sampler = config.optimization.sampler
+        config.optimization.sampler = "random"
+        config.optimization.n_trials = total_trials
+        config.optimization.n_startup_trials = min(
+            startup_before, max(0, total_trials - 1)
+        )
+        console.print(
+            f"[yellow]Auto-switched sampler from '{prev_sampler}' to 'random': "
+            f"n_trials ({total_trials}) is <= n_startup_trials ({startup_before}), "
+            "so startup sampling would consume the full trial budget. "
+            f"n_startup_trials is now {config.optimization.n_startup_trials}.[/yellow]"
+        )
+    # Create study controller (uses config with possibly updated sampler/n_trials)
     controller = StudyController.create_from_config(
         backend, config, create_db=create_db
     )
@@ -380,8 +414,6 @@ def run_optimization_sync(
     # Show appropriate log viewing instructions based on logging configuration
     _display_log_viewing_instructions(config)
     console.print()  # Add blank line for better readability
-
-    total_trials = n_trials or config.optimization.n_trials
 
     with Progress(
         SpinnerColumn(),
@@ -1086,6 +1118,11 @@ def validate_command(
             "Optimization", f"{opt_summary} ({study_config.optimization.sampler})"
         )
         table.add_row("Trials", str(study_config.optimization.n_trials))
+        cardinality = get_parameter_grid_cardinality(study_config)
+        table.add_row(
+            "Possible combinations (grid cardinality)",
+            str(cardinality),
+        )
         table.add_row("Model", study_config.benchmark.model)
         table.add_row(
             "Parameters",
