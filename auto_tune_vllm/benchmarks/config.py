@@ -22,11 +22,21 @@ class BenchmarkConfig:
     prompt_tokens: int = 1000  # For synthetic data
     output_tokens: int = 1000  # For synthetic data
     concurrency: int = 50  # Benchmark concurrency level (legacy, use rates instead)
-    
+
     # Advanced GuideLLM parameters
     processor: Optional[str] = None  # Processor model, defaults to model if not set
     rate: int = 50  # Single rate value for concurrent requests
     samples: int = 1000  # Number of samples to take
+    # GuideLLM benchmark profile (passed via --profile / --rate-type).
+    profile: Literal[
+        "synchronous",
+        "concurrent",
+        "throughput",
+        "latency",
+        "constant",
+        "poisson",
+        "sweep",
+    ] = "constant"
     
     # Token statistics for synthetic data - only used when explicitly specified
     prompt_tokens_stdev: Optional[int] = None
