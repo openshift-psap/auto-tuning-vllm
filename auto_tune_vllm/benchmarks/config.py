@@ -28,6 +28,8 @@ class BenchmarkConfig:
     rate: int = 50  # Single rate value for concurrent requests
     samples: int = 1000  # Number of samples to take
     # GuideLLM benchmark profile (passed via --profile / --rate-type).
+    # Defaults to "concurrent" to preserve the prior hardcoded behavior
+    # (--rate-type concurrent) for callers that don't specify a profile.
     profile: Literal[
         "synchronous",
         "concurrent",
@@ -36,7 +38,7 @@ class BenchmarkConfig:
         "constant",
         "poisson",
         "sweep",
-    ] = "constant"
+    ] = "concurrent"
     
     # Token statistics for synthetic data - only used when explicitly specified
     prompt_tokens_stdev: Optional[int] = None

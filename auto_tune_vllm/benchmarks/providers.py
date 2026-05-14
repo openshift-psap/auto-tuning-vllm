@@ -368,7 +368,7 @@ class GuideLLMBenchmark(BenchmarkProvider):
             # Agentic / multi-turn synthetic config (GuideLLM >= 0.6.0):
             if config.turns is not None:
                 data_config["turns"] = config.turns
-            if config.prefix_buckets:
+            if config.prefix_buckets is not None:
                 data_config["prefix_buckets"] = [
                     asdict(b) for b in config.prefix_buckets
                 ]
