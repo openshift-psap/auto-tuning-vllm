@@ -323,6 +323,7 @@ class GuideLLMBenchmark(BenchmarkProvider):
         cmd = [
             "guidellm",
             "benchmark",
+            "run",
             "--target",
             model_url,
             "--model",
