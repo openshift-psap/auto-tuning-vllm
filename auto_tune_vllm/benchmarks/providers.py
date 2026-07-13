@@ -9,6 +9,7 @@ import signal
 import subprocess
 import tempfile
 from abc import ABC, abstractmethod
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict
 
@@ -322,14 +323,15 @@ class GuideLLMBenchmark(BenchmarkProvider):
         cmd = [
             "guidellm",
             "benchmark",
+            "run",
             "--target",
             model_url,
             "--model",
             config.model,
             "--processor",
             processor,
-            "--rate-type",
-            "concurrent",
+            "--profile",
+            config.profile,
             "--max-seconds",
             str(config.max_seconds),
             "--rate",
@@ -363,6 +365,14 @@ class GuideLLMBenchmark(BenchmarkProvider):
                 data_config["output_tokens_min"] = config.output_tokens_min
             if config.output_tokens_max is not None:
                 data_config["output_tokens_max"] = config.output_tokens_max
+
+            # Agentic / multi-turn synthetic config (GuideLLM >= 0.6.0):
+            if config.turns is not None:
+                data_config["turns"] = config.turns
+            if config.prefix_buckets is not None:
+                data_config["prefix_buckets"] = [
+                    asdict(b) for b in config.prefix_buckets
+                ]
 
             cmd.extend(["--data", json.dumps(data_config)])
         else:
