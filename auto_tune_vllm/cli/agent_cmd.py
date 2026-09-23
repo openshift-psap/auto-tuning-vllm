@@ -30,7 +30,27 @@ def agent_command(
         100, "--max-iterations", help="Max agent loop iterations"
     ),
     profiles: Optional[list[str]] = typer.Option(
-        None, "--profiles", help="Benchmark profiles (default: balanced)"
+        None, "--profiles", help="Locked workload profile (first value is used)"
+    ),
+    concurrency: Optional[str] = typer.Option(
+        None, "--concurrency", help="Scored concurrency levels, comma-separated"
+    ),
+    max_seconds: Optional[int] = typer.Option(
+        None, "--max-seconds", help="Scored seconds per concurrency level"
+    ),
+    warmup_concurrency: Optional[int] = typer.Option(
+        None, "--warmup-concurrency", help="Fixed concurrency for unscored warmup"
+    ),
+    warmup_seconds: Optional[int] = typer.Option(
+        None, "--warmup-seconds", help="Unscored warmup duration in seconds"
+    ),
+    warmup_requests: Optional[int] = typer.Option(
+        None,
+        "--warmup-requests",
+        help="If set, warmup stops after this many requests instead of seconds",
+    ),
+    no_warmup: bool = typer.Option(
+        False, "--no-warmup", help="Skip unscored warmup before each scored run"
     ),
     ssh_user: str = typer.Option("root", "--ssh-user", help="SSH user for vLLM host"),
     output: str = typer.Option(
@@ -61,6 +81,16 @@ def agent_command(
     vertex_region: str = typer.Option(
         "us-east5", "--vertex-region", help="Vertex AI region"
     ),
+    mlflow_uri: Optional[str] = typer.Option(
+        None,
+        "--mlflow-uri",
+        help="MLflow tracking server URI. Enables automatic logging of all benchmark runs.",
+    ),
+    mlflow_experiment: str = typer.Option(
+        "vllm-autotuning",
+        "--mlflow-experiment",
+        help="MLflow experiment name (default: vllm-autotuning)",
+    ),
 ):
     """Run the Claude-driven pod-per-experiment vLLM tuner.
 
@@ -86,6 +116,12 @@ def agent_command(
         claude_model=claude_model,
         max_iterations=max_iterations,
         profiles=profiles or ["balanced"],
+        concurrency=concurrency,
+        max_seconds=max_seconds,
+        warmup_concurrency=warmup_concurrency,
+        warmup_seconds=warmup_seconds,
+        warmup_requests=warmup_requests,
+        no_warmup=no_warmup,
         ssh_user=ssh_user,
         output=output,
         verbose=verbose,
@@ -98,5 +134,7 @@ def agent_command(
         vertex_project_id=vertex_project_id
         or os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID"),
         vertex_region=vertex_region or os.environ.get("CLOUD_ML_REGION", "us-east5"),
+        mlflow_uri=mlflow_uri or os.environ.get("MLFLOW_TRACKING_URI"),
+        mlflow_experiment=mlflow_experiment,
     )
     run_agent(args)

@@ -38,7 +38,23 @@ auto-tune-vllm agent \
     --oc-namespace <namespace> \
     --pod-template examples/agent/experiment-pod.yaml \
     --max-iterations 30 \
-    --profiles balanced
+    --profiles balanced \
+    --concurrency 50 \
+    --max-seconds 60
+```
+
+The **scored test is locked** for the whole session (same ISL/OSL/concurrency for baseline and every experiment). Defaults come from `auto_tune_vllm/agent/settings.yaml` (`benchmark:` + `warmup:`): profile `balanced` (ISL=128, OSL=128), concurrency 50 for 60s.
+
+Before each scored run the controller hits an **unscored warmup** at a fixed concurrency (default 8 concurrent for 15s). Pass `--warmup-requests N` to stop after N requests instead of seconds. Warmup JSON is discarded. Use `--no-warmup` to skip.
+
+```bash
+# Example: decode-heavy scored test, 10s warmup at conc 4
+auto-tune-vllm agent ... \
+    --profiles decode_heavy \
+    --concurrency 50 \
+    --max-seconds 60 \
+    --warmup-concurrency 4 \
+    --warmup-seconds 10
 ```
 
 ## SSH mode
@@ -64,7 +80,7 @@ auto-tune-vllm agent --vertex --vllm-endpoint http://localhost:8000 --model <mod
 
 ## What the agent does
 
-1. **Baseline** — `nvidia-smi`, launch args, GuideLLM `balanced` profile, parse vLLM logs.
+1. **Baseline** — `nvidia-smi`, launch args, locked GuideLLM workload (warmup then scored), parse vLLM logs.
 2. **Experiments** — `create_vllm_pod` with extra CLI args, benchmark, `compare_benchmarks`, `delete_vllm_pod`.
 3. **Stop** — 10 consecutive experiments with no >2% gain, or `--max-iterations`.
 4. **Report** — markdown + JSON under `agent_reports/`.

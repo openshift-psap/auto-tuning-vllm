@@ -25,6 +25,33 @@ from typing import Optional
 import yaml
 
 
+def _merge_cli_args(existing: list[str], extra: list[str]) -> list[str]:
+    """Append extra CLI args, replacing any flag already present in existing."""
+    merged = list(existing)
+    i = 0
+    while i < len(extra):
+        flag = extra[i]
+        j = 0
+        while j < len(merged):
+            if merged[j] == flag:
+                drop = (
+                    2
+                    if j + 1 < len(merged)
+                    and not str(merged[j + 1]).startswith("-")
+                    else 1
+                )
+                del merged[j : j + drop]
+            else:
+                j += 1
+        merged.append(flag)
+        if i + 1 < len(extra) and not str(extra[i + 1]).startswith("-"):
+            merged.append(extra[i + 1])
+            i += 2
+        else:
+            i += 1
+    return merged
+
+
 class PodManager:
     """Manages ephemeral vLLM experiment pods on OpenShift.
 
@@ -84,9 +111,11 @@ class PodManager:
     def _build_pod_manifest(self, pod_name: str, vllm_args: list[str]) -> dict:
         """Create a pod manifest from the template with extra vLLM args.
 
-        Appends ``vllm_args`` to the existing ``args`` list of the first
-        container (assumed to be the vLLM container).
+        Reloads the YAML each time so template edits (CPU, image, model)
+        apply to later experiments in the same session.
         """
+        with open(self.base_yaml_path, "r") as f:
+            self._template = yaml.safe_load(f)
         manifest = copy.deepcopy(self._template)
 
         # Set unique pod name
@@ -96,11 +125,12 @@ class PodManager:
         labels = manifest["metadata"].setdefault("labels", {})
         labels["vllm-experiment"] = "true"
 
-        # Append tuning args to the container's args list
+        # Merge tuning args, replacing flags already in the template
+        # (e.g. --gpu-memory-utilization 0.85 must not leave a duplicate 0.90).
         container = manifest["spec"]["containers"][0]
-        existing_args = list(container.get("args", []))
-        existing_args.extend(vllm_args)
-        container["args"] = existing_args
+        container["args"] = _merge_cli_args(
+            list(container.get("args", [])), list(vllm_args or [])
+        )
 
         return manifest
 
@@ -114,6 +144,7 @@ class PodManager:
         oc_base = self._build_oc_base()
         deadline = time.time() + timeout
 
+        last_print = 0.0
         while time.time() < deadline:
             # Check pod phase
             cmd = oc_base + [
@@ -125,6 +156,14 @@ class PodManager:
             ]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             phase = result.stdout.strip()
+            elapsed = int(time.time() - (deadline - timeout))
+            if time.time() - last_print >= 15:
+                print(
+                    f"   still waiting for {pod_name}: phase={phase or '?'} "
+                    f"({elapsed}s / {timeout}s)",
+                    flush=True,
+                )
+                last_print = time.time()
 
             if phase == "Failed" or phase == "Unknown":
                 # Pod failed to start — get events for debugging
@@ -235,7 +274,8 @@ class PodManager:
 
         # Wait for pod to be ready
         print(f"   Waiting for pod {pod_name} to be ready...", flush=True)
-        self._wait_for_ready(pod_name)
+        # Model load on H200 can take several minutes (Gemma 26B ~5–15 min).
+        self._wait_for_ready(pod_name, timeout=900)
         print(f"   Pod {pod_name} is ready.", flush=True)
 
         # Start port-forward

@@ -10,11 +10,20 @@ import os
 import sys
 
 from .agentic import AgenticRunner
+from .benchmark_spec import spec_from_settings
 from .llm import ClaudeClient, get_model_id
 from .pod_manager import PodManager
+from .recipe_fetcher import fetch_vllm_recipe
 from .reporter import Reporter, TuningReport
 from .ssh_client import SSHClient
-from .tools import PROFILE_CHOICES, AgentTools, OcExecutor, SSHExecutor
+from .tools import (
+    _SETTINGS,
+    BENCHMARK_PROFILES,
+    PROFILE_CHOICES,
+    AgentTools,
+    OcExecutor,
+    SSHExecutor,
+)
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -81,7 +90,41 @@ Available Claude models: sonnet (default), opus, haiku
         nargs="+",
         default=["balanced"],
         choices=PROFILE_CHOICES,
-        help="Benchmark profiles to run (default: balanced)",
+        help="Locked workload profile (first value is used). Default: balanced",
+    )
+    parser.add_argument(
+        "--concurrency",
+        default=None,
+        help="Scored concurrency levels, comma-separated (default: 50)",
+    )
+    parser.add_argument(
+        "--max-seconds",
+        type=int,
+        default=None,
+        help="Scored seconds per concurrency level (default: 60)",
+    )
+    parser.add_argument(
+        "--warmup-concurrency",
+        type=int,
+        default=None,
+        help="Fixed concurrency for unscored warmup (default: 8)",
+    )
+    parser.add_argument(
+        "--warmup-seconds",
+        type=int,
+        default=None,
+        help="Unscored warmup duration in seconds (default: 15)",
+    )
+    parser.add_argument(
+        "--warmup-requests",
+        type=int,
+        default=None,
+        help="If set, warmup stops after this many requests instead of seconds",
+    )
+    parser.add_argument(
+        "--no-warmup",
+        action="store_true",
+        help="Skip the unscored warmup before each scored run",
     )
     parser.add_argument(
         "--ssh-user", default="root", help="SSH user for vLLM host (default: root)"
@@ -142,6 +185,21 @@ Available Claude models: sonnet (default), opus, haiku
         help="Vertex AI region (default: $CLOUD_ML_REGION or us-east5)",
     )
 
+    # MLflow options
+    parser.add_argument(
+        "--mlflow-uri",
+        default=os.environ.get("MLFLOW_TRACKING_URI"),
+        help=(
+            "MLflow tracking server URI for logging benchmark results "
+            "(default: $MLFLOW_TRACKING_URI). Logging is disabled if not set."
+        ),
+    )
+    parser.add_argument(
+        "--mlflow-experiment",
+        default=os.environ.get("MLFLOW_EXPERIMENT_NAME", "vllm-autotuning"),
+        help="MLflow experiment name (default: vllm-autotuning)",
+    )
+
     return parser
 
 
@@ -188,7 +246,6 @@ def run_agent(args) -> None:
         print(f"Vertex Project: {args.vertex_project_id}")
         print(f"Vertex Region:  {args.vertex_region}")
     print(f"Max Iterations: {args.max_iterations}")
-    print(f"Profiles:       {', '.join(args.profiles)}")
     print(f"Output Dir:     {args.output}")
 
     # Validate mode-specific args
@@ -271,7 +328,51 @@ def run_agent(args) -> None:
         atexit.register(pod_manager.cleanup_all)
         print(f"  PodManager ready (namespace={args.oc_namespace})")
 
-    # Create tools and agent
+    # Locked workload: decided here, not by the agent per experiment.
+    profile_name = (args.profiles or ["balanced"])[0]
+    if len(getattr(args, "profiles", []) or []) > 1:
+        print(
+            f"  Note: using first profile '{profile_name}' as the locked test "
+            f"(ignoring {args.profiles[1:]})"
+        )
+    try:
+        benchmark_spec = spec_from_settings(
+            _SETTINGS,
+            BENCHMARK_PROFILES,
+            profile_name=profile_name,
+            concurrency=getattr(args, "concurrency", None),
+            max_seconds=getattr(args, "max_seconds", None),
+            warmup_concurrency=getattr(args, "warmup_concurrency", None),
+            warmup_seconds=getattr(args, "warmup_seconds", None),
+            warmup_requests=getattr(args, "warmup_requests", None),
+            warmup_enabled=not getattr(args, "no_warmup", False),
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        sys.exit(1)
+    print_step(f"Locked test: {benchmark_spec.describe()}")
+
+    # Pre-fetch vLLM recipe from recipes.vllm.ai so the agent gets a complete
+    # structured briefing without relying on truncated curl output from inside the pod.
+    mlflow_uri = getattr(args, "mlflow_uri", None)
+    mlflow_experiment = getattr(args, "mlflow_experiment", "vllm-autotuning")
+
+    print_step("Fetching vLLM recipe from recipes.vllm.ai...")
+    vllm_recipe = fetch_vllm_recipe(args.model)
+    if vllm_recipe:
+        print(f"  Recipe found: {vllm_recipe['matched_hf_id']}")
+        if vllm_recipe.get("base_args"):
+            print(f"  Base args: {' '.join(vllm_recipe['base_args'])}")
+        if vllm_recipe.get("hardware_args"):
+            print(f"  H200 args: {' '.join(vllm_recipe['hardware_args'])}")
+    else:
+        print("  No recipe found — agent will use known-good tuning practices.")
+
+    if mlflow_uri:
+        print_step(f"MLflow logging enabled: {mlflow_uri} / experiment={mlflow_experiment}")
+    else:
+        print_step("MLflow logging disabled (pass --mlflow-uri to enable).")
+
     tools = AgentTools(
         executor=executor,
         vllm_endpoint=args.vllm_endpoint,
@@ -279,6 +380,9 @@ def run_agent(args) -> None:
         pod_manager=pod_manager,
         namespace=args.oc_namespace if args.oc_mode else None,
         kubeconfig=args.kubeconfig,
+        benchmark_spec=benchmark_spec,
+        mlflow_uri=mlflow_uri,
+        mlflow_experiment=mlflow_experiment,
     )
 
     agent = AgenticRunner(
@@ -287,7 +391,9 @@ def run_agent(args) -> None:
         max_iterations=args.max_iterations,
         vllm_endpoint=args.vllm_endpoint,
         model_name=args.model,
-        profiles=args.profiles,
+        profiles=[benchmark_spec.profile],
+        workload_description=benchmark_spec.describe(),
+        vllm_recipe=vllm_recipe,
     )
 
     # Run the agent loop

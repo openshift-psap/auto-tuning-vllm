@@ -12,11 +12,9 @@ Core Tools (from ai-perf-hackathon, adapted for RemoteExecutor):
     - done(summary, success)          -- Signal agent completion
 
 New Benchmark Tool:
-    - run_benchmark(profile, concurrency, endpoint, model)
-        Wraps GuideLLM to run benchmarks against vLLM endpoint.
-        Profiles: Balanced (ISL=128,OSL=128), Decode-Heavy (ISL=128,OSL=512),
-                  Prefill-Heavy (ISL=512,OSL=64), Long-Context (ISL=1024,OSL=128)
-        Default concurrency sweep: 1, 50
+    - run_benchmark(endpoint, model)
+        Warmup then scored GuideLLM run. Workload is locked for the session
+        (profile / ISL / OSL / concurrency from settings.yaml or CLI).
         Output: throughput (tok/sec), TTFT, ITL, TPOT at P50/P95/P99
 
 New Analysis Tools:
@@ -52,6 +50,7 @@ from typing import Optional
 
 import yaml
 
+from .benchmark_spec import BenchmarkSpec
 from .pod_manager import PodManager
 from .ssh_client import SSHClient
 
@@ -265,6 +264,7 @@ def _build_benchmark_profiles(settings: dict) -> dict:
         profiles[name] = {
             "isl": isl,
             "osl": osl,
+            "samples": samples,
             "description": profile.get("description", name),
             "data_flag": json.dumps(
                 {"prompt_tokens": isl, "output_tokens": osl, "samples": samples}
@@ -368,13 +368,13 @@ TOOL_DEFINITIONS: list[dict] = [
     {
         "name": "run_benchmark",
         "description": (
-            "Run a GuideLLM benchmark against the vLLM endpoint from the LOCAL machine. "
-            "This measures throughput (tokens/sec), TTFT, ITL, and TPOT at P50/P95/P99. "
-            "Choose a profile to set ISL/OSL and concurrency for the load pattern. "
-            "Default profiles: balanced (ISL=128,OSL=128), decode_heavy (ISL=128,OSL=512), "
-            "prefill_heavy (ISL=512,OSL=64), long_context (ISL=1024,OSL=128). "
-            "The benchmark takes 2-10 minutes depending on max-seconds. "
-            "Results are saved as JSON and a summary is returned."
+            "Run the LOCKED GuideLLM test against a vLLM endpoint from the LOCAL machine. "
+            "Workload (profile, ISL/OSL, concurrency, duration) is fixed for the session; "
+            "do not pick a different profile. An unscored warmup (fixed concurrency for a "
+            "short duration, or N requests) runs automatically first. Then the scored run "
+            "measures throughput, TTFT, ITL, TPOT. Pass endpoint only for experiment pods. "
+            "For FINAL VERIFICATION of the best config, pass repeat=3 to run 3 times and "
+            "get mean ± stddev — warmup runs before the first repeat only."
         ),
         "input_schema": {
             "type": "object",
@@ -383,16 +383,13 @@ TOOL_DEFINITIONS: list[dict] = [
                     "type": "string",
                     "enum": PROFILE_CHOICES,
                     "description": (
-                        "Benchmark workload profile. Controls ISL/OSL ratios. "
-                        "balanced: equal read/write, decode_heavy: long generation, "
-                        "prefill_heavy: long context input, long_context: very large input."
+                        "Ignored when a session spec is locked. Kept for compatibility."
                     ),
                 },
                 "concurrency": {
                     "type": "string",
                     "description": (
-                        "Comma-separated concurrency levels for the sweep "
-                        "(e.g. '1,50'). Default: '1,50'"
+                        "Ignored when a session spec is locked. Kept for compatibility."
                     ),
                 },
                 "endpoint": {
@@ -407,8 +404,9 @@ TOOL_DEFINITIONS: list[dict] = [
                 },
                 "max_seconds": {
                     "type": "integer",
-                    "description": "Maximum seconds per concurrency level. Default: 30",
-                    "default": 30,
+                    "description": (
+                        "Ignored when a session spec is locked. Kept for compatibility."
+                    ),
                 },
                 "output_path": {
                     "type": "string",
@@ -417,8 +415,18 @@ TOOL_DEFINITIONS: list[dict] = [
                         "Default: ./benchmark_results/<profile>_<timestamp>.json"
                     ),
                 },
+                "repeat": {
+                    "type": "integer",
+                    "description": (
+                        "Number of times to run the scored benchmark. Default: 1. "
+                        "Use repeat=3 for FINAL VERIFICATION of the best config to get "
+                        "mean ± stddev and confirm reproducibility. "
+                        "Warmup runs only before the first repeat."
+                    ),
+                    "default": 1,
+                },
             },
-            "required": ["profile"],
+            "required": [],
         },
     },
     {
@@ -832,73 +840,35 @@ def _extract_guidellm_metrics(bench_data: dict) -> str:
     return "\n".join(lines)
 
 
-def _handle_run_benchmark(
-    args: dict,
-    _executor: RemoteExecutor,
-    command_history: list[dict],
-) -> ToolResult:
-    """Run a GuideLLM benchmark from the LOCAL machine against the vLLM endpoint.
+def _guidellm_request_type(model: str, override: Optional[str] = None) -> str:
+    if override:
+        return override
+    model_lower = model.lower()
+    chat_indicators = ("chat", "instruct", "it-", "-it", "rlhf")
+    if any(ind in model_lower for ind in chat_indicators):
+        return "chat_completions"
+    return "text_completions"
 
-    This does NOT run on the remote pod/host -- it runs locally using subprocess
-    because GuideLLM sends HTTP requests to the vLLM endpoint.
-    """
-    profile_name = args["profile"]
-    endpoint = args["endpoint"]
-    model = args["model"]
-    max_seconds = args.get("max_seconds", 30)
-    concurrency = args.get(
-        "concurrency", ",".join(str(c) for c in DEFAULT_CONCURRENCY_LEVELS)
-    )
 
-    if profile_name not in BENCHMARK_PROFILES:
-        return ToolResult(
-            tool="run_benchmark",
-            success=False,
-            output="",
-            error=f"Unknown profile '{profile_name}'. Choose from: {list(BENCHMARK_PROFILES.keys())}",
-        )
+def _processor_name(model: str, processor: Optional[str] = None) -> str:
+    name = processor or model
+    if name.startswith("/models/"):
+        return name[len("/models/") :]
+    return name
 
-    profile = BENCHMARK_PROFILES[profile_name]
 
-    # Build output path
-    import datetime
-
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = (
-        args.get("output_path")
-        or f"./benchmark_results/{profile_name}_{timestamp}.json"
-    )
-
-    # Ensure output directory exists
-    import os
-
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-
-    # Build GuideLLM command (runs locally, targets the vLLM endpoint)
-    # Target URL must end with /v1 for OpenAI-compatible API
-    target_url = endpoint.rstrip("/")
-    if not target_url.endswith("/v1"):
-        target_url += "/v1"
-
-    # Derive HuggingFace processor name from model path
-    # e.g. "/models/facebook/opt-125m" -> "facebook/opt-125m"
-    processor = args.get("processor", model)
-    if processor.startswith("/models/"):
-        processor = processor[len("/models/") :]
-
-    # Determine request type: chat/instruct models use chat_completions,
-    # base/causal models (opt, gpt2, etc.) need text_completions.
-    # Auto-detect from model name, with explicit override via request_type arg.
-    request_type = args.get("request_type")
-    if not request_type:
-        model_lower = model.lower()
-        _CHAT_INDICATORS = ("chat", "instruct", "it-", "-it", "rlhf")
-        if any(ind in model_lower for ind in _CHAT_INDICATORS):
-            request_type = "chat_completions"
-        else:
-            request_type = "text_completions"
-
-    guidellm_cmd = [
+def _build_guidellm_cmd(
+    *,
+    target_url: str,
+    model: str,
+    processor: str,
+    request_type: str,
+    concurrency: str,
+    max_seconds: int,
+    output_path: str,
+    data_flag: str,
+) -> list[str]:
+    return [
         sys.executable,
         "-m",
         "guidellm",
@@ -915,10 +885,210 @@ def _handle_run_benchmark(
         "--processor-args",
         '{"trust-remote-code":"true"}',
         "--data",
-        profile["data_flag"],
+        data_flag,
     ]
 
-    command_str = " ".join(guidellm_cmd)
+
+def _run_guidellm(cmd: list[str], timeout: int) -> subprocess.CompletedProcess:
+    """Run GuideLLM and stream stdout so the operator can see progress.
+
+    GuideLLM's Rich progress bar rewrites a single line (no newline). A
+    blocking ``readline()`` never returns, so the timeout never fires and
+    orphaned workers keep hitting the experiment port-forward after the
+    agent is killed. Read available bytes with ``select`` and kill the
+    whole process group on timeout.
+    """
+    import os
+    import select
+    import signal
+    import time
+
+    def _kill_tree(proc: subprocess.Popen) -> None:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    chunks: list[bytes] = []
+    deadline = time.time() + timeout
+    try:
+        assert proc.stdout is not None
+        fd = proc.stdout.fileno()
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                _kill_tree(proc)
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            ready, _, _ = select.select([fd], [], [], min(1.0, remaining))
+            if ready:
+                data = os.read(fd, 4096)
+                if data:
+                    chunks.append(data)
+                    text = data.decode("utf-8", errors="replace")
+                    for raw_line in text.splitlines():
+                        if raw_line.strip():
+                            print(f"   GuideLLM: {raw_line.rstrip()}", flush=True)
+                    continue
+            if proc.poll() is not None:
+                rest = proc.stdout.read()
+                if rest:
+                    chunks.append(rest)
+                    text = rest.decode("utf-8", errors="replace")
+                    if text.strip():
+                        print(text, end="", flush=True)
+                break
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        raise
+    out = b"".join(chunks).decode("utf-8", errors="replace")
+    return subprocess.CompletedProcess(cmd, proc.returncode or 0, out, "")
+
+
+def _aggregate_repeat_metrics(
+    all_flat_metrics: list[list[dict]],
+    repeat: int,
+) -> str:
+    """Compute mean ± stddev across repeat runs, grouped by concurrency level."""
+    import math
+
+    conc_groups: dict[int, list[dict]] = {}
+    for run_metrics in all_flat_metrics:
+        for m in run_metrics:
+            conc = m.get("concurrency", 0)
+            conc_groups.setdefault(conc, []).append(m)
+
+    lines = [f"=== AGGREGATED METRICS ({repeat} repeat runs) ==="]
+    for conc in sorted(conc_groups.keys()):
+        runs = conc_groups[conc]
+        lines.append(f"\n--- Concurrency: {conc} (n={len(runs)}) ---")
+        all_keys = sorted(
+            {k for r in runs for k, v in r.items() if isinstance(v, (int, float)) and k != "concurrency"}
+        )
+        for key in all_keys:
+            values = [r[key] for r in runs if isinstance(r.get(key), (int, float))]
+            if not values:
+                continue
+            mean = sum(values) / len(values)
+            if len(values) > 1:
+                variance = sum((v - mean) ** 2 for v in values) / (len(values) - 1)
+                stddev = math.sqrt(variance)
+                cv = stddev / mean * 100 if mean != 0 else 0
+                lines.append(f"  {key}: mean={mean:.3f} ± {stddev:.3f}  (CV={cv:.1f}%)")
+            else:
+                lines.append(f"  {key}: {mean:.3f}")
+    return "\n".join(lines)
+
+
+def _log_benchmark_to_mlflow(
+    mlflow_uri: str,
+    experiment_name: str,
+    *,
+    model: str,
+    profile: str,
+    concurrency: str,
+    is_baseline: bool,
+    bench_data: dict,
+    extra_tags: dict = None,
+) -> None:
+    """Log a benchmark run to MLflow. Silently skips if mlflow is not installed."""
+    try:
+        import mlflow
+    except ImportError:
+        return
+
+    try:
+        mlflow.set_tracking_uri(mlflow_uri)
+        mlflow.set_experiment(experiment_name)
+        flat_metrics_list = _extract_flat_metrics(bench_data)
+
+        with mlflow.start_run():
+            mlflow.set_tag("model", model)
+            mlflow.set_tag("profile", profile)
+            mlflow.set_tag("concurrency", concurrency)
+            mlflow.set_tag("is_baseline", str(is_baseline))
+            for k, v in (extra_tags or {}).items():
+                mlflow.set_tag(str(k), str(v))
+
+            for flat in flat_metrics_list:
+                conc = flat.get("concurrency", 0)
+                for key, value in flat.items():
+                    if isinstance(value, (int, float)) and key != "concurrency":
+                        mlflow.log_metric(f"{key}_conc{conc}", value)
+    except Exception:
+        pass  # never let MLflow errors crash the agent
+
+
+def _handle_run_benchmark(
+    args: dict,
+    _executor: RemoteExecutor,
+    command_history: list[dict],
+) -> ToolResult:
+    """Warm up, then run the locked scored GuideLLM test against the endpoint."""
+    import datetime
+    import os
+    import tempfile
+
+    spec: Optional[BenchmarkSpec] = args.get("_benchmark_spec")
+    endpoint = args["endpoint"]
+    model = args["model"]
+
+    if spec is None:
+        profile_name = args.get("profile", "balanced")
+        if profile_name not in BENCHMARK_PROFILES:
+            return ToolResult(
+                tool="run_benchmark",
+                success=False,
+                output="",
+                error=(
+                    f"Unknown profile '{profile_name}'. "
+                    f"Choose from: {list(BENCHMARK_PROFILES.keys())}"
+                ),
+            )
+        profile = BENCHMARK_PROFILES[profile_name]
+        max_seconds = args.get("max_seconds", 60)
+        concurrency = args.get(
+            "concurrency", ",".join(str(c) for c in DEFAULT_CONCURRENCY_LEVELS)
+        )
+        data_flag = profile["data_flag"]
+        description = profile["description"]
+        warmup = None
+    else:
+        profile_name = spec.profile
+        profile = BENCHMARK_PROFILES[profile_name]
+        max_seconds = spec.max_seconds
+        concurrency = spec.concurrency_csv
+        data_flag = spec.data_flag
+        description = spec.description
+        warmup = spec.warmup if spec.warmup.enabled else None
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_path = (
+        args.get("output_path")
+        or f"./benchmark_results/{profile_name}_{timestamp}.json"
+    )
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+
+    target_url = endpoint.rstrip("/")
+    if not target_url.endswith("/v1"):
+        target_url += "/v1"
+
+    processor = _processor_name(model, args.get("processor"))
+    request_type = _guidellm_request_type(model, args.get("request_type"))
+
+    repeat = max(1, int(args.get("repeat", 1)))
+    mlflow_uri = args.get("_mlflow_uri")
+    mlflow_experiment = args.get("_mlflow_experiment", "vllm-autotuning")
+    is_baseline = bool(args.get("_is_baseline", False))
 
     command_history.append(
         {
@@ -927,62 +1097,159 @@ def _handle_run_benchmark(
             "concurrency": concurrency,
             "endpoint": endpoint,
             "model": model,
-            "command": command_str,
+            "warmup": warmup.describe() if warmup else "disabled",
+            "repeat": repeat,
         }
     )
 
-    try:
-        # GuideLLM can take a long time; allow up to 30 minutes
-        bench_timeout = max(max_seconds * len(concurrency.split(",")) + 120, 600)
-        result = subprocess.run(
-            guidellm_cmd,
-            capture_output=True,
-            text=True,
-            timeout=bench_timeout,
-        )
-        stdout = result.stdout.replace("\r\n", "\n").replace("\r", "\n")
-        stderr = result.stderr.replace("\r\n", "\n").replace("\r", "\n")
+    n_levels = max(len(concurrency.split(",")), 1)
+    # Cap wait to the scored duration plus setup/drain, not a 10min floor.
+    bench_timeout = max_seconds * n_levels + 180
 
-        if result.returncode == 0:
-            # Try to read and summarize the JSON output
+    try:
+        # Warmup runs ONCE before all repeats — it already warms up the JIT.
+        if warmup:
+            if warmup.requests:
+                warm_seconds = 300
+                warm_samples = int(warmup.requests)
+            else:
+                warm_seconds = max(int(warmup.seconds), 5)
+                warm_samples = max(
+                    int(warmup.concurrency) * int(warmup.seconds) * 8, 256
+                )
+            isl = spec.isl if spec is not None else profile["isl"]
+            osl = spec.osl if spec is not None else profile["osl"]
+            warm_data = json.dumps(
+                {"prompt_tokens": isl, "output_tokens": osl, "samples": warm_samples}
+            )
+            warm_fd, warm_path = tempfile.mkstemp(suffix="_warmup.json")
+            os.close(warm_fd)
+            warm_cmd = _build_guidellm_cmd(
+                target_url=target_url,
+                model=model,
+                processor=processor,
+                request_type=request_type,
+                concurrency=str(warmup.concurrency),
+                max_seconds=warm_seconds,
+                output_path=warm_path,
+                data_flag=warm_data,
+            )
+            print(f"   Warmup (unscored): {warmup.describe()}", flush=True)
+            warm_result = _run_guidellm(warm_cmd, timeout=warm_seconds + 120)
+            try:
+                os.unlink(warm_path)
+            except OSError:
+                pass
+            if warm_result.returncode != 0:
+                err = (warm_result.stderr or warm_result.stdout or "warmup failed")[-2000:]
+                command_history[-1]["success"] = False
+                return ToolResult(
+                    tool="run_benchmark",
+                    success=False,
+                    output="",
+                    error=f"Warmup failed (scored run skipped):\n{err}",
+                )
+            print("   Warmup complete. Starting scored run...", flush=True)
+
+        # Scored runs — loop for repeat.
+        all_flat_metrics: list[list[dict]] = []
+        last_bench_data: Optional[dict] = None
+        last_output_path = output_path
+        last_result = None
+
+        for run_idx in range(repeat):
+            run_output_path = (
+                output_path.replace(".json", f"_r{run_idx}.json")
+                if repeat > 1
+                else output_path
+            )
+            last_output_path = run_output_path
+
+            guidellm_cmd = _build_guidellm_cmd(
+                target_url=target_url,
+                model=model,
+                processor=processor,
+                request_type=request_type,
+                concurrency=concurrency,
+                max_seconds=max_seconds,
+                output_path=run_output_path,
+                data_flag=data_flag,
+            )
+            if run_idx == 0:
+                command_history[-1]["command"] = " ".join(guidellm_cmd)
+
+            if repeat > 1:
+                print(f"   Scored run {run_idx + 1}/{repeat}...", flush=True)
+
+            result = _run_guidellm(guidellm_cmd, timeout=bench_timeout)
+            last_result = result
+
+            if result.returncode == 0 and os.path.exists(run_output_path):
+                try:
+                    with open(run_output_path, encoding="utf-8") as fh:
+                        bench_data = json.load(fh)
+                    last_bench_data = bench_data
+                    if repeat > 1:
+                        all_flat_metrics.append(_extract_flat_metrics(bench_data))
+                    if mlflow_uri:
+                        _log_benchmark_to_mlflow(
+                            mlflow_uri,
+                            mlflow_experiment,
+                            model=model,
+                            profile=profile_name,
+                            concurrency=concurrency,
+                            is_baseline=is_baseline,
+                            bench_data=bench_data,
+                            extra_tags={
+                                "repeat_index": run_idx,
+                                "repeat_total": repeat,
+                            },
+                        )
+                except (json.JSONDecodeError, OSError):
+                    pass
+            elif result.returncode != 0:
+                break
+
+        stdout = last_result.stdout.replace("\r\n", "\n").replace("\r", "\n")
+        stderr = last_result.stderr.replace("\r\n", "\n").replace("\r", "\n")
+
+        if last_result.returncode == 0:
             summary_parts = [
-                f"Profile: {profile_name} ({profile['description']})",
-                f"Concurrency levels: {concurrency}",
+                f"LOCKED TEST: {profile_name} ({description})",
+                f"ISL={profile['isl']} OSL={profile['osl']}",
+                f"Scored concurrency: {concurrency}",
                 f"Max seconds per level: {max_seconds}",
-                f"Results saved to: {output_path}",
+                f"Warmup: {warmup.describe() if warmup else 'disabled'}",
+                f"Repeat: {repeat}",
+                f"Results saved to: {last_output_path}",
             ]
 
-            # Parse GuideLLM JSON and extract structured metrics
-            if os.path.exists(output_path):
-                try:
-                    with open(output_path, "r") as f:
-                        bench_data = json.load(f)
-                    metrics_summary = _extract_guidellm_metrics(bench_data)
-                    summary_parts.append("")
-                    summary_parts.append(metrics_summary)
-                except (json.JSONDecodeError, OSError) as e:
-                    summary_parts.append(f"(Could not parse results JSON: {e})")
+            if last_bench_data:
+                summary_parts.append("")
+                summary_parts.append(_extract_guidellm_metrics(last_bench_data))
 
-            # Append last 2000 chars of stdout for context
+            if repeat > 1 and all_flat_metrics:
+                summary_parts.append("")
+                summary_parts.append(_aggregate_repeat_metrics(all_flat_metrics, repeat))
+
             summary_parts.append("")
             summary_parts.append("--- GuideLLM stdout (last 2000 chars) ---")
             summary_parts.append(stdout[-2000:] if len(stdout) > 2000 else stdout)
-
             output_text = "\n".join(summary_parts)
         else:
             output_text = (
-                f"GuideLLM exited with code {result.returncode}\n"
+                f"GuideLLM exited with code {last_result.returncode}\n"
                 f"stdout:\n{stdout[-2000:]}\n"
                 f"stderr:\n{stderr[-2000:]}"
             )
 
-        command_history[-1]["success"] = result.returncode == 0
+        command_history[-1]["success"] = last_result.returncode == 0
 
         return ToolResult(
             tool="run_benchmark",
-            success=result.returncode == 0,
+            success=last_result.returncode == 0,
             output=output_text,
-            error=stderr if result.returncode != 0 else None,
+            error=stderr if last_result.returncode != 0 else None,
         )
 
     except subprocess.TimeoutExpired:
@@ -991,7 +1258,7 @@ def _handle_run_benchmark(
             tool="run_benchmark",
             success=False,
             output="",
-            error=f"GuideLLM timed out after {bench_timeout}s",
+            error="GuideLLM timed out",
         )
     except FileNotFoundError:
         command_history[-1]["success"] = False
@@ -1328,22 +1595,51 @@ def _handle_fetch_vllm_logs(
         }
     )
 
-    # Build the command to fetch logs from the pod
-    if log_source == "file":
-        log_path = args.get("log_path", "/tmp/vllm.log")
-        cmd = f"tail -{tail_lines} {log_path} 2>/dev/null || echo 'Log file not found: {log_path}'"
-    elif log_source == "dmesg":
-        cmd = f"dmesg | tail -{tail_lines} 2>/dev/null || echo 'dmesg not available'"
+    # Prefer `oc logs` on OpenShift: `cat /proc/1/fd/1` never EOFs on a live
+    # vLLM process, so oc exec hits the 30s timeout and returns nothing useful.
+    if isinstance(executor, OcExecutor):
+        oc_cmd = ["oc"]
+        if executor.kubeconfig:
+            oc_cmd += ["--kubeconfig", executor.kubeconfig]
+        oc_cmd += [
+            "logs",
+            "-n",
+            executor.namespace,
+            executor.pod_name,
+            f"--tail={tail_lines}",
+            "-c",
+            executor.container or "vllm",
+        ]
+        try:
+            result = subprocess.run(
+                oc_cmd, capture_output=True, text=True, timeout=30
+            )
+            result = CommandResult(
+                stdout=result.stdout,
+                stderr=result.stderr,
+                returncode=result.returncode,
+                success=result.returncode == 0,
+            )
+        except subprocess.TimeoutExpired:
+            result = CommandResult(
+                stdout="",
+                stderr="oc logs timed out after 30s",
+                returncode=-1,
+                success=False,
+            )
     else:
-        # Default: try multiple log sources
-        cmd = (
-            f"(cat /proc/1/fd/1 2>/dev/null | tail -{tail_lines}) || "
-            f"(tail -{tail_lines} /tmp/vllm*.log 2>/dev/null) || "
-            f"(journalctl -u vllm --no-pager -n {tail_lines} 2>/dev/null) || "
-            f"echo 'No vLLM logs found. Try log_source=file with a specific path.'"
-        )
-
-    result = executor.run(cmd, timeout=30)
+        if log_source == "file":
+            log_path = args.get("log_path", "/tmp/vllm.log")
+            cmd = f"tail -{tail_lines} {log_path} 2>/dev/null || echo 'Log file not found: {log_path}'"
+        elif log_source == "dmesg":
+            cmd = f"dmesg | tail -{tail_lines} 2>/dev/null || echo 'dmesg not available'"
+        else:
+            cmd = (
+                f"(timeout 5 tail -n {tail_lines} /proc/1/fd/1 2>/dev/null) || "
+                f"(tail -{tail_lines} /tmp/vllm*.log 2>/dev/null) || "
+                f"echo 'No vLLM logs found. Try log_source=file with a specific path.'"
+            )
+        result = executor.run(cmd, timeout=30)
 
     if not result.success:
         command_history[-1]["success"] = False
@@ -1966,6 +2262,9 @@ class AgentTools:
         pod_manager: Optional[PodManager] = None,
         namespace: Optional[str] = None,
         kubeconfig: Optional[str] = None,
+        benchmark_spec: Optional[BenchmarkSpec] = None,
+        mlflow_uri: Optional[str] = None,
+        mlflow_experiment: str = "vllm-autotuning",
     ):
         self.executor = executor
         self.vllm_endpoint = vllm_endpoint
@@ -1973,6 +2272,9 @@ class AgentTools:
         self.pod_manager = pod_manager
         self.namespace = namespace
         self.kubeconfig = kubeconfig
+        self.benchmark_spec = benchmark_spec
+        self.mlflow_uri = mlflow_uri
+        self.mlflow_experiment = mlflow_experiment
         self.command_history: list[dict] = []
 
     def get_tool_definitions(self) -> list[dict]:
@@ -1986,10 +2288,25 @@ class AgentTools:
         otherwise falls back to the CLI-provided baseline endpoint.
         Model name is always filled from CLI args.
         """
+        # Copy so we never mutate Claude's tool_use input (that object is
+        # stored in messages and must stay JSON-serializable).
+        args = dict(args)
         if name == "run_benchmark":
             if "endpoint" not in args or not args.get("endpoint"):
                 args["endpoint"] = self.vllm_endpoint  # baseline default
             args["model"] = self.model_name
+            if self.benchmark_spec is not None:
+                args["_benchmark_spec"] = self.benchmark_spec
+                args["profile"] = self.benchmark_spec.profile
+                args["concurrency"] = self.benchmark_spec.concurrency_csv
+                args["max_seconds"] = self.benchmark_spec.max_seconds
+            # MLflow — injected as internal params (not exposed to Claude's tool schema)
+            if self.mlflow_uri:
+                args["_mlflow_uri"] = self.mlflow_uri
+                args["_mlflow_experiment"] = self.mlflow_experiment
+                args["_is_baseline"] = (
+                    not args.get("endpoint") or args["endpoint"] == self.vllm_endpoint
+                )
         elif name == "check_preemptions":
             if "endpoint" not in args or not args.get("endpoint"):
                 args["endpoint"] = self.vllm_endpoint  # baseline default
