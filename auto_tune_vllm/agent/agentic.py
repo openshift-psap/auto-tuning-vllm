@@ -40,12 +40,11 @@ TOOLS AVAILABLE:
 - run_command: Execute shell commands on the vLLM pod/host (runs REMOTELY on pod)
 - read_file: Read files from the vLLM pod/host (runs REMOTELY on pod)
 - write_file: Write files to the vLLM pod/host (runs REMOTELY on pod)
-- run_benchmark: Run GuideLLM benchmark (runs LOCALLY, hits the port-forwarded endpoint)
+- run_benchmark: Run GuideLLM benchmark as an in-cluster Job; it returns comparison-ready metrics
 - fetch_vllm_logs: Fetch + parse vLLM logs from pod with 120+ regex patterns (runs REMOTELY)
-- read_benchmark_results: Read a GuideLLM JSON file and extract structured metrics (runs LOCALLY)
-- compare_benchmarks: Compare two benchmark JSON files to detect regressions (runs LOCALLY)
 - analyze_trace: Analyze a PyTorch profiler Chrome trace JSON (runs LOCALLY)
 - map_kernel: Map a CUDA kernel name to its source and category (runs LOCALLY)
+- search_vllm_prs: Search the local index of merged vLLM PRs for relevant tuning work
 - create_vllm_pod: Create an experiment pod with extra vLLM args (returns pod_name + endpoint)
 - delete_vllm_pod: Delete an experiment pod and clean up port-forward
 - done: Signal completion with summary
@@ -55,43 +54,57 @@ ARCHITECTURE:
 - For each tuning experiment, create a NEW pod with create_vllm_pod.
 - run_command/read_file/write_file/fetch_vllm_logs execute INSIDE a pod.
   Pass pod_name to target an experiment pod; omit to target the baseline pod.
-- run_benchmark runs LOCALLY. Pass endpoint from create_vllm_pod to benchmark
-  an experiment pod; omit endpoint to benchmark the baseline.
+- run_benchmark runs as an in-cluster Job. Pass the local endpoint returned by
+  create_vllm_pod; the tool maps it to that pod's private Service automatically.
 - run_benchmark model is AUTO-FILLED — just specify the profile name (and endpoint if experiment).
 
 TUNING WORKFLOW (follow this order strictly):
 
-0. FIRST, look up the vLLM recipes page for model-specific optimizations:
+0. FIRST, look up vLLM Recipes for model-specific optimizations:
    a. Run: run_command with command="curl -s https://recipes.vllm.ai/models.json"
-      This returns a JSON array of all models with recipes. Search for an entry
-      whose "hf_id" matches (or is close to) the model being served.
-   b. If a match is found, fetch the model recipe:
+      This generated catalog is sourced from https://github.com/vllm-project/recipes.
+      Search for an entry whose "hf_id" matches (or is close to) the model being
+      served.
+   b. If there is no exact match, check the source recipes repository for the
+      served model's family or architecture before falling back to generic advice:
+      - Inspect https://github.com/vllm-project/recipes/tree/main/models for YAML
+        recipes whose directory or filename matches the model family (for example,
+        Llama, Qwen, Mistral, DeepSeek, MoE, or VLM).
+      - Fetch each promising YAML from raw.githubusercontent.com and extract its
+        model.base_args, variants, hardware_overrides, features, and
+        opt_in_features.
+      - Treat a family-level recipe as a lead, not proof: only retain its arguments
+        after the isolated experiment has been benchmarked against the baseline.
+      - If GitHub is unreachable, continue with the generated catalog and known-good
+        practices below.
+   c. If an exact catalog match is found, fetch the model recipe:
       run_command with command="curl -s https://recipes.vllm.ai/{hf_id}.json"
       (e.g. "curl -s https://recipes.vllm.ai/meta-llama/Llama-3.1-8B-Instruct.json")
-   c. The recipe JSON contains:
+   d. The recipe JSON contains:
       - model.base_args: recommended base vLLM args
       - variants: precision/quantization options (e.g. fp8, nvfp4) with extra_args
       - hardware_overrides: hardware-specific args (e.g. for AMD)
       - features / opt_in_features: optional features to enable
-   d. Use the recipe's recommended args as your FIRST experiment. Then build on
+   e. Use the recipe's recommended args as your FIRST experiment. Then build on
       top of them with additional tuning.
-   e. If curl fails (no internet on the pod), skip this step and proceed with
+   f. If curl fails (no internet on the pod), skip this step and proceed with
       the known-good practices listed below.
+   g. If search_vllm_prs is available, search it for the served model architecture,
+      hardware, and current bottleneck. It is a local, read-only index of merged
+      vLLM PRs; use returned PRs as leads, then validate every idea by benchmarking.
 
-1. Benchmark the BASELINE pod (already running, uses default endpoint):
-   a. Call run_benchmark with profile="balanced" (no endpoint needed — uses baseline)
-   b. Call fetch_vllm_logs (no pod_name — reads baseline pod logs)
-   c. Call read_benchmark_results with the JSON path from step 1a
-   → Save the baseline JSON path for later comparison.
+1. The baseline benchmark is performed before the agent loop and supplied in
+   the user context.  Read its completed-request, latency, and throughput rows
+   as the reference. Do not rerun it unless explicitly asked.
 
 2. For EACH tuning experiment:
    a. Call create_vllm_pod with vllm_args (e.g. ["--enable-chunked-prefill"])
       → Returns pod_name and endpoint (e.g. "http://localhost:8001")
-   b. Call run_benchmark with profile="balanced" AND endpoint from step 2a
+   b. Call run_benchmark with the requested workload profile AND endpoint from step 2a
    c. Call fetch_vllm_logs with pod_name from step 2a (reads experiment pod logs)
-   d. Call read_benchmark_results with the JSON path from step 2b
-   e. Call compare_benchmarks with baseline JSON (from step 1c) and experiment JSON (from step 2d)
-   f. Call delete_vllm_pod with pod_name from step 2a to clean up
+   d. Compare the returned GuideLLM metric rows directly with the supplied
+      baseline: higher output tokens/sec and lower TTFT/ITL/TPOT are better.
+   e. Call delete_vllm_pod with pod_name from step 2a to clean up
 
 3. NEVER kill processes on the baseline pod. NEVER restart the baseline pod.
    All tuning is done by creating fresh experiment pods with different args.
@@ -99,7 +112,7 @@ TUNING WORKFLOW (follow this order strictly):
 4. Call done with all comparison results when finished.
 
 MANDATORY WORKFLOW FOR EACH BENCHMARK CYCLE:
-After EVERY run_benchmark call, you MUST do BOTH of these before making any decisions:
+After EVERY experiment run_benchmark call, you MUST do both of these before making decisions:
 
 1. CALL fetch_vllm_logs (with pod_name if experiment pod): This parses the vLLM
    server logs and returns structured data: server config (model, non-default args),
@@ -107,13 +120,12 @@ After EVERY run_benchmark call, you MUST do BOTH of these before making any deci
    memory (KV cache size, model memory), compilation (attention backend,
    torch.compile time), and warnings/errors.
 
-2. CALL read_benchmark_results with the JSON path from run_benchmark output:
-   This returns structured per-concurrency metrics: success rate, throughput,
-   TTFT, ITL, TPOT with P50/P95/P99 percentiles.
+2. Compare the completed Job's returned metric rows with the baseline metric
+   rows already supplied in this conversation. Do not call the local JSON-file
+   tools: the benchmark Job, rather than the controller, owns result artifacts.
 
-AFTER TUNING, use compare_benchmarks:
-   Pass the baseline JSON path and the post-tuning JSON path to get a side-by-side
-   comparison with regression detection (2% threshold, metric directionality aware).
+AFTER TUNING, compare the returned baseline and experiment metric rows with a
+2% threshold, accounting for metric directionality.
 
 IF BENCHMARK FAILS (errored requests > 0):
 - Do NOT call done. Do NOT give up.
@@ -138,7 +150,8 @@ VLLM TUNABLE PARAMETERS (pass these to create_vllm_pod as vllm_args):
 5. --enable-prefix-caching (bool, default false): Cache common prefixes
 6. --max-model-len (int, default auto): Max context length
 7. --enforce-eager (bool, default false): Disable CUDA graphs
-8. --tensor-parallel-size (1-8, default 1): Multi-GPU parallelism
+8. --tensor-parallel-size: Multi-GPU parallelism. Obey any runtime maximum supplied
+   in the agent context.
 9. --quantization (null/fp8/awq/gptq): Quantization method
 10. --scheduling-policy (fcfs/priority): Request scheduling
 11. --kv-cache-dtype (auto/fp8): KV cache data type. fp8 halves cache memory.
@@ -185,10 +198,10 @@ REPORTING FORMAT:
 
 RULES:
 - NEVER modify, kill, or restart the baseline pod
-- ALWAYS call fetch_vllm_logs AND read_benchmark_results after each benchmark
+- ALWAYS call fetch_vllm_logs and compare the returned Job metrics after each benchmark
 - ONE parameter change at a time (one experiment pod per tuning attempt)
 - ALWAYS delete experiment pods after benchmarking (call delete_vllm_pod)
-- Compare metrics before vs after each change using compare_benchmarks
+- Compare metrics before versus after each change using the returned Job rows
 - Do NOT call done until you have 10 consecutive non-improving experiments"""
 
 
@@ -204,6 +217,8 @@ class AgenticRunner:
         model_name: str = "",
         profiles: list = None,
         enable_cost_optimization: bool = True,
+        max_tensor_parallel_size: int | None = None,
+        baseline_summary: str | None = None,
     ):
         self.tools = tools
         self.llm = llm_client
@@ -220,7 +235,10 @@ class AgenticRunner:
         self.messages: list = []
         self.decision_log: list = []
         self.enable_cost_optimization = enable_cost_optimization
-        self._benchmark_called = False
+        self.max_tensor_parallel_size = max_tensor_parallel_size
+        self.baseline_summary = baseline_summary
+        # A deterministic baseline Job has already exercised the benchmark path.
+        self._benchmark_called = baseline_summary is not None
         self._nudge_sent = False
 
     def run(self) -> AgentState:
@@ -228,46 +246,58 @@ class AgenticRunner:
         print(">> Starting vLLM performance tuning agent...", flush=True)
 
         # Initialize conversation
+        runtime_constraints = "No additional runtime constraints were supplied."
+        if self.max_tensor_parallel_size is not None:
+            runtime_constraints = (
+                "Maximum tensor parallel size: "
+                f"{self.max_tensor_parallel_size}. Do not exceed it."
+            )
+
         self.messages = [
             {
                 "role": "user",
-                "content": f"""You are connected to a vLLM inference server (baseline pod).
+                "content": (
+                    f"""You are connected to a vLLM inference server (baseline pod).
 
 Baseline endpoint (port-forwarded): {self.vllm_endpoint}
 Model: {self.model_name}
 Profiles to benchmark: {", ".join(self.profiles)}
+Runtime constraints: {runtime_constraints}
 
 CRITICAL RULES:
 - The BASELINE pod is NEVER modified or restarted. It serves as your reference.
 - To test tuning parameters, create EXPERIMENT pods with create_vllm_pod.
-- For baseline benchmarks, call run_benchmark with just profile (endpoint auto-filled).
+- The baseline GuideLLM Job has already completed; use its metrics below as reference.
 - For experiment benchmarks, pass the endpoint returned by create_vllm_pod.
 - NEVER call done after a benchmark failure. Diagnose from vLLM logs instead.
 
 EXACT STEPS (follow this order strictly):
 
-Phase 1 — Baseline:
+Phase 1 — Baseline (already completed deterministically before this loop):
 1. Call run_command with command="nvidia-smi" (1 tool call)
 2. Call run_command with command="cat /proc/1/cmdline | tr '\\0' ' '" (see vLLM launch args)
-3. Call run_benchmark with profile="balanced" (THIS IS MANDATORY ON STEP 3 — uses baseline)
-4. AFTER benchmark completes, ALWAYS call BOTH:
-   a. fetch_vllm_logs (parses baseline pod's vLLM server config, memory, errors)
-   b. read_benchmark_results with the JSON path from step 3 output
-   → SAVE the baseline JSON path for later compare_benchmarks calls.
+3. Call fetch_vllm_logs (parses baseline pod's vLLM server config, memory, errors)
+4. Use the supplied baseline GuideLLM Job result as the reference. Do NOT rerun it.
 
 Phase 2 — Experiments (repeat for each tuning attempt):
 5. Call create_vllm_pod with vllm_args (e.g. ["--enable-chunked-prefill"])
    → Note the returned pod_name and endpoint
-6. Call run_benchmark with profile="balanced" AND endpoint from step 5
+6. Call run_benchmark with profile="{self.profiles[0]}" AND endpoint from step 5
 7. Call fetch_vllm_logs with pod_name from step 5
-8. Call read_benchmark_results with the JSON path from step 6
-9. Call compare_benchmarks with baseline JSON (step 4b) and experiment JSON (step 8)
-10. Call delete_vllm_pod with pod_name from step 5
+8. Compare the returned Job metric rows to the supplied baseline metrics.
+9. Call delete_vllm_pod with pod_name from step 5
 
 Phase 3 — Completion:
 11. After all experiments, call done with a summary of all comparison results.
 
-Steps 4a/4b (and 7/8 for experiments) are MANDATORY after every benchmark.""",
+Log inspection and metric comparison are mandatory after every experiment benchmark."""
+                    + (
+                        "\n\nBASELINE JOB RESULT (already completed):\n"
+                        f"{self.baseline_summary}"
+                        if self.baseline_summary
+                        else ""
+                    )
+                ),
             }
         ]
 

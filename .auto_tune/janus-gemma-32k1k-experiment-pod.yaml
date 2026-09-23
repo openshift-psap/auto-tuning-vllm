@@ -1,0 +1,55 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-tune-placeholder
+  labels:
+    vllm-experiment: 'true'
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: psap-de-h200-cluster-6mgmp-gpu-h200-7zgjh
+  containers:
+  - name: vllm
+    image: vllm/vllm-openai:v0.24.0
+    args:
+    - /models/RedHatAI--gemma-4-26B-A4B-it-FP8-dynamic
+    - --served-model-name=RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic
+    - --tensor-parallel-size=4
+    - --max-model-len=32768
+    - --enable-prefix-caching
+    - --gpu-memory-utilization=0.90
+    env:
+    - name: HOME
+      value: /tmp
+    - name: USER
+      value: vllm
+    - name: XDG_CACHE_HOME
+      value: /tmp/.cache
+    - name: TORCHINDUCTOR_CACHE_DIR
+      value: /tmp/torchinductor
+    ports:
+    - name: http
+      containerPort: 8000
+    readinessProbe:
+      httpGet:
+        path: /health
+        port: http
+      initialDelaySeconds: 10
+      periodSeconds: 10
+    resources:
+      requests:
+        cpu: '32'
+        memory: 128Gi
+        nvidia.com/gpu: 4
+      limits:
+        cpu: '32'
+        memory: 128Gi
+        nvidia.com/gpu: 4
+    volumeMounts:
+    - name: model-cache
+      mountPath: /models
+      readOnly: true
+  volumes:
+  - name: model-cache
+    persistentVolumeClaim:
+      claimName: vllm-model-cache

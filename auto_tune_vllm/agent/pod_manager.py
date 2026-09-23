@@ -95,6 +95,9 @@ class PodManager:
         # Add a label to identify experiment pods for easy cleanup
         labels = manifest["metadata"].setdefault("labels", {})
         labels["vllm-experiment"] = "true"
+        # A unique selector lets an in-cluster GuideLLM Job reach exactly this
+        # experiment rather than another concurrent tuning pod.
+        labels["vllm-experiment-id"] = pod_name
 
         # Append tuning args to the container's args list
         container = manifest["spec"]["containers"][0]
@@ -103,6 +106,40 @@ class PodManager:
         container["args"] = existing_args
 
         return manifest
+
+    def _build_service_manifest(self, pod_name: str) -> dict:
+        """Build the private Service used by in-cluster benchmark Jobs."""
+        return {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {
+                "name": pod_name,
+                "labels": {"app": "auto-tune-vllm", "vllm-experiment": "true"},
+            },
+            "spec": {
+                "selector": {"vllm-experiment-id": pod_name},
+                "ports": [{"name": "http", "port": 8000, "targetPort": "http"}],
+            },
+        }
+
+    def _apply_manifest(self, manifest: dict, prefix: str) -> None:
+        """Apply a manifest through ``oc`` without retaining it on disk."""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", prefix=f"{prefix}_", delete=False
+        ) as tmp:
+            yaml.dump(manifest, tmp, default_flow_style=False)
+            tmp_path = tmp.name
+        try:
+            result = subprocess.run(
+                self._build_oc_base() + ["apply", "-f", tmp_path],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"oc apply failed: {result.stderr}")
+        finally:
+            os.unlink(tmp_path)
 
     def _wait_for_ready(
         self, pod_name: str, timeout: int = 120, poll_interval: int = 5
@@ -215,33 +252,30 @@ class PodManager:
         # Build manifest
         manifest = self._build_pod_manifest(pod_name, vllm_args)
 
-        # Write to temp file and apply
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", prefix=f"{pod_name}_", delete=False
-        ) as tmp:
-            yaml.dump(manifest, tmp, default_flow_style=False)
-            tmp_path = tmp.name
+        self._apply_manifest(manifest, pod_name)
+        print(f"   Pod {pod_name} created.", flush=True)
+
+        self._apply_manifest(self._build_service_manifest(pod_name), f"{pod_name}_svc")
+        print(f"   Service {pod_name} created.", flush=True)
 
         try:
-            apply_cmd = self._build_oc_base() + ["apply", "-f", tmp_path]
-            result = subprocess.run(
-                apply_cmd, capture_output=True, text=True, timeout=30
+            # Wait for pod to be ready
+            print(f"   Waiting for pod {pod_name} to be ready...", flush=True)
+            self._wait_for_ready(pod_name)
+            print(f"   Pod {pod_name} is ready.", flush=True)
+
+            # Start port-forward
+            print(
+                f"   Starting port-forward :{local_port} -> {pod_name}:8000",
+                flush=True,
             )
-            if result.returncode != 0:
-                raise RuntimeError(f"oc apply failed: {result.stderr}")
-            print(f"   Pod {pod_name} created.", flush=True)
-        finally:
-            os.unlink(tmp_path)
-
-        # Wait for pod to be ready
-        print(f"   Waiting for pod {pod_name} to be ready...", flush=True)
-        self._wait_for_ready(pod_name)
-        print(f"   Pod {pod_name} is ready.", flush=True)
-
-        # Start port-forward
-        print(f"   Starting port-forward :{local_port} -> {pod_name}:8000", flush=True)
-        pf_proc = self._start_port_forward(pod_name, local_port)
-        print(f"   Port-forward active (pid={pf_proc.pid}).", flush=True)
+            pf_proc = self._start_port_forward(pod_name, local_port)
+            print(f"   Port-forward active (pid={pf_proc.pid}).", flush=True)
+        except Exception:
+            # A failed readiness check happens before this pod is recorded in
+            # active_pods, so clean both resources explicitly.
+            self._delete_untracked_experiment(pod_name)
+            raise
 
         endpoint = f"http://localhost:{local_port}"
 
@@ -250,9 +284,28 @@ class PodManager:
             "local_port": local_port,
             "vllm_args": vllm_args,
             "endpoint": endpoint,
+            "cluster_endpoint": f"http://{pod_name}:8000",
         }
 
         return pod_name, endpoint
+
+    def _delete_untracked_experiment(self, pod_name: str) -> None:
+        """Remove resources created before an experiment became active."""
+        for resource in ("pod", "service"):
+            subprocess.run(
+                self._build_oc_base()
+                + ["delete", resource, pod_name, "--ignore-not-found"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+    def get_cluster_target(self, endpoint: str) -> Optional[str]:
+        """Return the private Service URL corresponding to a local endpoint."""
+        for info in self.active_pods.values():
+            if info["endpoint"] == endpoint:
+                return info["cluster_endpoint"]
+        return None
 
     def delete_pod(self, pod_name: str) -> None:
         """Delete an experiment pod and kill its port-forward process.
@@ -291,6 +344,19 @@ class PodManager:
         else:
             print(
                 f"   Warning: Failed to delete pod {pod_name}: {result.stderr}",
+                flush=True,
+            )
+
+        # The Service belongs exclusively to this experiment selector.
+        service_result = subprocess.run(
+            self._build_oc_base() + ["delete", "service", pod_name, "--ignore-not-found"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if service_result.returncode != 0:
+            print(
+                f"   Warning: Failed to delete Service {pod_name}: {service_result.stderr}",
                 flush=True,
             )
 

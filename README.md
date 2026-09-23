@@ -41,13 +41,11 @@ auto-tune-vllm logs --study-id 42 --trial-number 15
 # Resume interrupted study
 auto-tune-vllm resume --study-name study_35884
 
-# Claude-driven tuner (keeps the baseline pod read-only)
+# Claude-driven tuner. A profile provisions missing resources and reuses its baseline.
 pip install -e ".[agent]"
 auto-tune-vllm agent \
-    --vllm-endpoint http://localhost:8000 \
-    --model facebook/opt-125m \
-    --oc-mode --oc-pod <baseline-pod> --oc-namespace <ns> \
-    --pod-template examples/agent/experiment-pod.yaml
+    --tuning-profile examples/agent/profiles/janus-gemma-32k1k.yaml \
+    --kubeconfig /path/to/kubeconfig
 ```
 
 

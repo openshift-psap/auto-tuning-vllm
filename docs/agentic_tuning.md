@@ -14,31 +14,40 @@ chooses the next config itself.
 pip install -e ".[agent]"
 ```
 
-Requires: `oc` (OpenShift mode) or SSH access, a running baseline vLLM server,
-and either `ANTHROPIC_API_KEY` or Vertex AI credentials.
+Requires: `oc` (OpenShift mode) or SSH access, and either `ANTHROPIC_API_KEY`
+or Vertex AI credentials. A profile-based OpenShift run provisions its own cache,
+model downloader, baseline service, and experiment template.
 
-## OpenShift (recommended)
+## OpenShift with a tuning profile (recommended)
 
-1. Port-forward the **baseline** pod (never modified):
+The tuning profile is the source of truth for the model, model cache, GPU
+resources, TP ceiling, vLLM runtime flags, and benchmark workload. By default,
+the agent provisions missing cache/download/baseline resources first, reuses a
+healthy baseline without restarting it, creates a local baseline port-forward,
+and passes the rendered experiment template to the agent.
 
 ```bash
-oc port-forward -n <namespace> <baseline-pod> 8000:8000
+auto-tune-vllm agent \
+    --tuning-profile examples/agent/profiles/janus-gemma-32k1k.yaml \
+    --kubeconfig /path/to/kubeconfig \
+    --max-iterations 30
 ```
 
-2. Copy and edit `examples/agent/experiment-pod.yaml` for your image, model path, PVC, and GPU count.
+Use `--no-provision` only when the profile environment is already present and
+you are supplying the normal connection options yourself. A completed downloader
+Job is reused, so routine profile runs do not download the model again.
 
-3. Run:
+## Manually managed OpenShift
+
+For an existing environment that is intentionally not profile-managed, supply
+the endpoint, model, pod, namespace, and pod template explicitly:
 
 ```bash
 auto-tune-vllm agent \
     --vllm-endpoint http://localhost:8000 \
     --model facebook/opt-125m \
-    --oc-mode \
-    --oc-pod <baseline-pod> \
-    --oc-namespace <namespace> \
-    --pod-template examples/agent/experiment-pod.yaml \
-    --max-iterations 30 \
-    --profiles balanced
+    --oc-mode --oc-pod <baseline-pod> --oc-namespace <namespace> \
+    --pod-template examples/agent/experiment-pod.yaml
 ```
 
 ## SSH mode

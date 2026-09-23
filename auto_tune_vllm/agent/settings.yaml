@@ -24,6 +24,16 @@ profiles:
     output_sequence_length: 128
     samples: 100
     description: "Long-context workload (ISL=1024, OSL=128)"
+  long_context_32k_1k:
+    input_sequence_length: 32768
+    output_sequence_length: 1024
+    samples: 10
+    description: "Long-context workload (ISL=32768, OSL=1024)"
+  long_context_16k_1k:
+    input_sequence_length: 16384
+    output_sequence_length: 1024
+    samples: 10
+    description: "Long-context workload (ISL=16384, OSL=1024)"
 
 # Default sweep used by run_benchmark. Override per-call with the concurrency arg.
 default_concurrency_levels: [1, 50]

@@ -52,6 +52,7 @@ from typing import Optional
 
 import yaml
 
+from .benchmark_job import ClusterBenchmarkRunner
 from .pod_manager import PodManager
 from .ssh_client import SSHClient
 
@@ -368,13 +369,13 @@ TOOL_DEFINITIONS: list[dict] = [
     {
         "name": "run_benchmark",
         "description": (
-            "Run a GuideLLM benchmark against the vLLM endpoint from the LOCAL machine. "
+            "Run a GuideLLM benchmark as an in-cluster OpenShift Job. "
             "This measures throughput (tokens/sec), TTFT, ITL, and TPOT at P50/P95/P99. "
             "Choose a profile to set ISL/OSL and concurrency for the load pattern. "
             "Default profiles: balanced (ISL=128,OSL=128), decode_heavy (ISL=128,OSL=512), "
             "prefill_heavy (ISL=512,OSL=64), long_context (ISL=1024,OSL=128). "
             "The benchmark takes 2-10 minutes depending on max-seconds. "
-            "Results are saved as JSON and a summary is returned."
+            "A completed-job metric summary is returned directly."
         ),
         "input_schema": {
             "type": "object",
@@ -665,6 +666,38 @@ TOOL_DEFINITIONS: list[dict] = [
             "required": ["summary", "success"],
         },
     },
+    {
+        "name": "search_vllm_prs",
+        "description": (
+            "Search a local, read-only SQLite index of merged vLLM pull requests. "
+            "Use this to identify prior work relevant to a model architecture, hardware "
+            "platform, or tuning bottleneck. This tool never accesses GitHub; the index "
+            "must have been synchronized and materialized with Git LFS by a maintainer."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Free-text query, such as 'KV cache decode latency'.",
+                },
+                "architecture": {
+                    "type": "string",
+                    "description": "Optional derived facet, such as qwen, llama, or moe.",
+                },
+                "hardware": {
+                    "type": "string",
+                    "description": "Optional derived facet, such as h100, mi300, or amd.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum results to return. Default: 10.",
+                    "default": 10,
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -836,12 +869,11 @@ def _handle_run_benchmark(
     args: dict,
     _executor: RemoteExecutor,
     command_history: list[dict],
+    *,
+    benchmark_runner: Optional[ClusterBenchmarkRunner] = None,
+    benchmark_target: Optional[str] = None,
 ) -> ToolResult:
-    """Run a GuideLLM benchmark from the LOCAL machine against the vLLM endpoint.
-
-    This does NOT run on the remote pod/host -- it runs locally using subprocess
-    because GuideLLM sends HTTP requests to the vLLM endpoint.
-    """
+    """Run GuideLLM as an in-cluster Job against the selected vLLM Service."""
     profile_name = args["profile"]
     endpoint = args["endpoint"]
     model = args["model"]
@@ -860,6 +892,38 @@ def _handle_run_benchmark(
 
     profile = BENCHMARK_PROFILES[profile_name]
 
+    if benchmark_runner is None or benchmark_target is None:
+        return ToolResult(
+            tool="run_benchmark",
+            success=False,
+            output="",
+            error="GuideLLM requires an in-cluster benchmark Job configuration.",
+        )
+    command_history.append(
+        {
+            "tool": "run_benchmark",
+            "profile": profile_name,
+            "concurrency": concurrency,
+            "endpoint": benchmark_target,
+            "model": model,
+        }
+    )
+    try:
+        output = benchmark_runner.run(
+            profile=profile,
+            target=benchmark_target,
+            model=model,
+            concurrency=concurrency,
+            max_seconds=max_seconds,
+        )
+        command_history[-1]["success"] = True
+        return ToolResult(tool="run_benchmark", success=True, output=output)
+    except Exception as exc:
+        command_history[-1]["success"] = False
+        return ToolResult(tool="run_benchmark", success=False, output="", error=str(exc))
+
+    # Legacy local benchmark implementation retained below for compatibility
+    # with callers that use it directly; profile-driven agent runs return above.
     # Build output path
     import datetime
 
@@ -1771,8 +1835,9 @@ def _handle_create_vllm_pod(
                 f"Experiment pod created successfully.\n"
                 f"  Pod name: {pod_name}\n"
                 f"  Endpoint: {endpoint}\n"
+                f"  Benchmark Service: {pod_name}:8000\n"
                 f"  vLLM args: {' '.join(vllm_args)}\n\n"
-                f'Use this endpoint when calling run_benchmark (pass endpoint="{endpoint}").\n'
+                f'Pass endpoint="{endpoint}" to run_benchmark; it maps to this pod\'s private Service.\n'
                 f'Use pod_name="{pod_name}" with run_command or fetch_vllm_logs to inspect the pod.\n'
                 f'Call delete_vllm_pod(pod_name="{pod_name}") when done.'
             ),
@@ -1855,6 +1920,62 @@ def _handle_done(
     )
 
 
+def _handle_search_vllm_prs(
+    args: dict,
+    _executor: RemoteExecutor,
+    command_history: list[dict],
+) -> ToolResult:
+    """Search the locally materialized vLLM merged-PR index."""
+    from ..knowledge.vllm_pr_index import DEFAULT_DATABASE_PATH, VllmPullRequestIndex
+
+    query = args.get("query", "")
+    architecture = args.get("architecture")
+    hardware = args.get("hardware")
+    limit = args.get("limit", 10)
+    command_history.append(
+        {
+            "tool": "search_vllm_prs",
+            "query": query,
+            "architecture": architecture,
+            "hardware": hardware,
+        }
+    )
+    if not DEFAULT_DATABASE_PATH.exists():
+        command_history[-1]["success"] = False
+        return ToolResult(
+            tool="search_vllm_prs",
+            success=False,
+            output="",
+            error=(
+                f"Local vLLM PR index not found at {DEFAULT_DATABASE_PATH}. "
+                "Ask a maintainer to run 'auto-tune-vllm pr-index sync' and distribute "
+                "the database through Git LFS."
+            ),
+        )
+    try:
+        results = VllmPullRequestIndex(DEFAULT_DATABASE_PATH).search(
+            query=query,
+            architecture=architecture,
+            hardware=hardware,
+            limit=limit,
+        )
+        payload = [result.__dict__ for result in results]
+        command_history[-1]["success"] = True
+        return ToolResult(
+            tool="search_vllm_prs",
+            success=True,
+            output=json.dumps(payload, indent=2),
+        )
+    except Exception as exc:
+        command_history[-1]["success"] = False
+        return ToolResult(
+            tool="search_vllm_prs",
+            success=False,
+            output="",
+            error=f"Failed to search local vLLM PR index: {exc}",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Dispatch table
 # ---------------------------------------------------------------------------
@@ -1873,6 +1994,7 @@ _TOOL_HANDLERS = {
     "create_vllm_pod": _handle_create_vllm_pod,
     "delete_vllm_pod": _handle_delete_vllm_pod,
     "done": _handle_done,
+    "search_vllm_prs": _handle_search_vllm_prs,
 }
 
 # Handlers that accept pod_manager as a keyword argument
@@ -1889,6 +2011,8 @@ def dispatch_tool(
     command_history: Optional[list[dict]] = None,
     *,
     pod_manager: Optional[PodManager] = None,
+    benchmark_runner: Optional[ClusterBenchmarkRunner] = None,
+    benchmark_target: Optional[str] = None,
     namespace: Optional[str] = None,
     kubeconfig: Optional[str] = None,
 ) -> ToolResult:
@@ -1932,6 +2056,14 @@ def dispatch_tool(
     # For pod manager tools, pass pod_manager as keyword arg
     if name in _POD_MANAGER_HANDLERS:
         return handler(args, executor, command_history, pod_manager=pod_manager)
+    if name == "run_benchmark":
+        return handler(
+            args,
+            executor,
+            command_history,
+            benchmark_runner=benchmark_runner,
+            benchmark_target=benchmark_target,
+        )
 
     # For pod-aware tools, create a temp OcExecutor if pod_name is specified
     target_executor = executor
@@ -1966,6 +2098,8 @@ class AgentTools:
         pod_manager: Optional[PodManager] = None,
         namespace: Optional[str] = None,
         kubeconfig: Optional[str] = None,
+        benchmark_runner: Optional[ClusterBenchmarkRunner] = None,
+        benchmark_target: Optional[str] = None,
     ):
         self.executor = executor
         self.vllm_endpoint = vllm_endpoint
@@ -1973,6 +2107,8 @@ class AgentTools:
         self.pod_manager = pod_manager
         self.namespace = namespace
         self.kubeconfig = kubeconfig
+        self.benchmark_runner = benchmark_runner
+        self.benchmark_target = benchmark_target
         self.command_history: list[dict] = []
 
     def get_tool_definitions(self) -> list[dict]:
@@ -1982,14 +2118,28 @@ class AgentTools:
     def dispatch(self, name: str, args: dict) -> ToolResult:
         """Dispatch a tool call, tracking history on this instance.
 
-        For run_benchmark, uses the agent-supplied endpoint if provided,
-        otherwise falls back to the CLI-provided baseline endpoint.
+        For run_benchmark, maps an experiment's local port-forward endpoint to
+        its private Service; baseline calls use the configured baseline Service.
         Model name is always filled from CLI args.
         """
+        benchmark_target = self.benchmark_target
         if name == "run_benchmark":
             if "endpoint" not in args or not args.get("endpoint"):
                 args["endpoint"] = self.vllm_endpoint  # baseline default
             args["model"] = self.model_name
+            endpoint = args.get("endpoint")
+            if endpoint != self.vllm_endpoint and self.pod_manager:
+                benchmark_target = self.pod_manager.get_cluster_target(endpoint)
+                if benchmark_target is None:
+                    return ToolResult(
+                        tool="run_benchmark",
+                        success=False,
+                        output="",
+                        error=(
+                            "The benchmark endpoint does not belong to an active "
+                            "experiment pod. Create a pod first or omit endpoint for baseline."
+                        ),
+                    )
         elif name == "check_preemptions":
             if "endpoint" not in args or not args.get("endpoint"):
                 args["endpoint"] = self.vllm_endpoint  # baseline default
@@ -2001,6 +2151,8 @@ class AgentTools:
             pod_manager=self.pod_manager,
             namespace=self.namespace,
             kubeconfig=self.kubeconfig,
+            benchmark_runner=self.benchmark_runner,
+            benchmark_target=benchmark_target,
         )
 
     # Convenience methods for direct (non-agent) use

@@ -19,6 +19,8 @@ from ..core.study_controller import StudyController
 from ..execution.backends import RayExecutionBackend
 from ..logging.manager import CentralizedLogger, LogStreamer
 from .agent_cmd import agent_command
+from .agent_provision_cmd import provision_agent_environment_command
+from .pr_index_cmd import app as pr_index_app
 
 # Setup rich console and app
 console = Console()
@@ -31,6 +33,10 @@ app.command(
     "agent",
     help="Run the Claude-driven pod-per-experiment vLLM tuner",
 )(agent_command)
+app.add_typer(pr_index_app, name="pr-index")
+app.command(
+    "agent-provision", help="Provision an agentic tuning environment from a profile"
+)(provision_agent_environment_command)
 
 # Setup logger for CLI
 logger = logging.getLogger(__name__)
@@ -256,10 +262,7 @@ def optimize_command(
                 "(or set optimization.max_concurrent_trials in the config)"
                 "[/bold red]"
             )
-            console.print(
-                "YAML:\n  optimization:\n"
-                "    max_concurrent_trials: 2"
-            )
+            console.print("YAML:\n  optimization:\n    max_concurrent_trials: 2")
             raise typer.Exit(1)
         if final_max_concurrent_trials < 1:
             console.print(
@@ -410,8 +413,7 @@ def run_optimization_sync(
             # User interrupted with Ctrl+C
             progress.update(task, description="⚠️  Optimization interrupted by user")
             logger.warning(
-                "Keyboard interrupt received (Ctrl+C). "
-                "Initiating graceful shutdown..."
+                "Keyboard interrupt received (Ctrl+C). Initiating graceful shutdown..."
             )
             console.print(
                 "\n[yellow]⚠️  Interrupt signal received. "
@@ -937,15 +939,12 @@ def resume_command(
                     "[/bold red]"
                 )
                 console.print(
-                    "Set CLI flag or config: "
-                    "optimization.max_concurrent_trials"
+                    "Set CLI flag or config: optimization.max_concurrent_trials"
                 )
                 raise typer.Exit(1)
             if final_max_concurrent_trials < 1:
                 console.print(
-                    "[bold red]"
-                    "❌ --max-concurrent-trials must be >= 1"
-                    "[/bold red]"
+                    "[bold red]❌ --max-concurrent-trials must be >= 1[/bold red]"
                 )
                 raise typer.Exit(1)
         resume_study_sync(
@@ -1250,7 +1249,6 @@ def check_environment_command(
 def _check_ray_cluster_environment():
     """Check environment on all Ray cluster nodes."""
     try:
-
         if not ray.is_initialized():
             console.print("[yellow]Initializing Ray connection...[/yellow]")
             ray.init(address="auto")

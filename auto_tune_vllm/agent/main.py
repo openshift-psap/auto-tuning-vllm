@@ -8,8 +8,10 @@ import atexit
 import json
 import os
 import sys
+import urllib.request
 
 from .agentic import AgenticRunner
+from .benchmark_job import ClusterBenchmarkRunner
 from .llm import ClaudeClient, get_model_id
 from .pod_manager import PodManager
 from .reporter import Reporter, TuningReport
@@ -75,6 +77,12 @@ Available Claude models: sonnet (default), opus, haiku
         type=int,
         default=100,
         help="Max agent loop iterations (default: 100)",
+    )
+    parser.add_argument(
+        "--max-tensor-parallel-size",
+        type=int,
+        default=None,
+        help="Optional runtime ceiling for tensor parallel size",
     )
     parser.add_argument(
         "--profiles",
@@ -271,6 +279,16 @@ def run_agent(args) -> None:
         atexit.register(pod_manager.cleanup_all)
         print(f"  PodManager ready (namespace={args.oc_namespace})")
 
+    benchmark_runner = None
+    benchmark_target = getattr(args, "benchmark_target", None)
+    benchmark_config = getattr(args, "benchmark_config", None)
+    if args.oc_mode and benchmark_config and benchmark_target:
+        benchmark_runner = ClusterBenchmarkRunner(
+            namespace=args.oc_namespace,
+            kubeconfig=args.kubeconfig,
+            config=benchmark_config,
+        )
+
     # Create tools and agent
     tools = AgentTools(
         executor=executor,
@@ -279,7 +297,39 @@ def run_agent(args) -> None:
         pod_manager=pod_manager,
         namespace=args.oc_namespace if args.oc_mode else None,
         kubeconfig=args.kubeconfig,
+        benchmark_runner=benchmark_runner,
+        benchmark_target=benchmark_target,
     )
+
+    baseline_summary = None
+    if benchmark_runner is not None:
+        print_step("Verifying served model and running baseline benchmark Job...")
+        try:
+            with urllib.request.urlopen(f"{args.vllm_endpoint}/v1/models") as response:
+                served_model = json.load(response)["data"][0]["id"]
+        except Exception as exc:
+            print(f"Error: Could not read the baseline model ID: {exc}")
+            sys.exit(1)
+        if served_model != args.model:
+            print(
+                "Error: Baseline model does not match the benchmark model: "
+                f"served={served_model}, benchmark={args.model}"
+            )
+            sys.exit(1)
+        baseline = tools.dispatch(
+            "run_benchmark",
+            {
+                "profile": args.profiles[0],
+                "concurrency": ",".join(
+                    str(value) for value in benchmark_config.get("concurrency", [1])
+                ),
+                "max_seconds": benchmark_config.get("max_seconds", 30),
+            },
+        )
+        if not baseline.success:
+            print(f"Error: Baseline benchmark Job failed: {baseline.error}")
+            sys.exit(1)
+        baseline_summary = baseline.output
 
     agent = AgenticRunner(
         llm_client=llm,
@@ -288,6 +338,8 @@ def run_agent(args) -> None:
         vllm_endpoint=args.vllm_endpoint,
         model_name=args.model,
         profiles=args.profiles,
+        max_tensor_parallel_size=getattr(args, "max_tensor_parallel_size", None),
+        baseline_summary=baseline_summary,
     )
 
     # Run the agent loop

@@ -1,0 +1,55 @@
+name: janus-gemma-16k1k
+
+# The source of truth for this complete agentic-tuning environment.
+environment:
+  namespace: agentic-tuning-32k1k
+  node_selector:
+    kubernetes.io/hostname: psap-de-h200-cluster-6mgmp-gpu-h200-7zgjh
+  image: vllm/vllm-openai:v0.24.0
+  model:
+    id: RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic
+    cache_path: /models/RedHatAI--gemma-4-26B-A4B-it-FP8-dynamic
+  cache:
+    pvc_name: vllm-model-cache
+    storage_class: lvms-vg-gpu-node
+    size: 200Gi
+  model_access:
+    source_namespace: gemma4-bench
+    secret_name: hf-token
+    secret_key: HF_TOKEN
+  # Preserve the completed cache-population Job on repeat profile runs.
+  download_job_name: download-gemma-4-26b
+  baseline:
+    name: gemma-4-tp4-baseline
+    resources:
+      cpu: "32"
+      memory: 128Gi
+      gpus: 4
+  benchmark:
+    image: ghcr.io/vllm-project/guidellm:v0.7.3
+    results_pvc:
+      name: guidellm-results
+      storage_class: lvms-vg-gpu-node
+      size: 20Gi
+    resources:
+      requests:
+        cpu: "2"
+        memory: 4Gi
+      limits:
+        cpu: "4"
+        memory: 8Gi
+    concurrency: [1]
+    max_seconds: 30
+
+workload:
+  benchmark_profiles:
+    - long_context_16k_1k
+
+constraints:
+  max_tensor_parallel_size: 4
+
+runtime:
+  max_model_len: 32768
+  base_vllm_args:
+    - --enable-prefix-caching
+    - --gpu-memory-utilization=0.90
