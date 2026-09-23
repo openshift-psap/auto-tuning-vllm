@@ -135,7 +135,7 @@ class PodManager:
         return manifest
 
     def _wait_for_ready(
-        self, pod_name: str, timeout: int = 120, poll_interval: int = 5
+        self, pod_name: str, timeout: int = 900, poll_interval: int = 10
     ) -> bool:
         """Poll pod readiness until ready or timeout.
 

@@ -1,0 +1,54 @@
+name: hera-gemma-auto-tune
+
+# Profile for the existing auto-tune/vllm-baseline pod on HERA.
+# Use with --no-provision (pod is already running).
+environment:
+  namespace: auto-tune
+  node_selector:
+    kubernetes.io/hostname: psap-hera-gr4xh-gpu-h200-4gvdh
+  image: vllm/vllm-openai:v0.29.0
+  model:
+    id: RedHatAI/gemma-4-26B-A4B-it-FP8-Dynamic
+    cache_path: /models/gemma
+  cache:
+    pvc_name: model-cache
+    storage_class: lvms-vg-gpu-node
+    size: 50Gi
+  model_access:
+    source_namespace: auto-tune
+    secret_name: hf-token
+    secret_key: HF_TOKEN
+  download_job_name: download-gemma-4-26b
+  baseline:
+    name: vllm-baseline
+    resources:
+      cpu: "32"
+      memory: 64Gi
+      gpus: 1
+  benchmark:
+    image: ghcr.io/vllm-project/guidellm:v0.7.3
+    results_pvc:
+      name: guidellm-results
+      storage_class: lvms-vg-gpu-node
+      size: 10Gi
+    resources:
+      requests:
+        cpu: "2"
+        memory: 4Gi
+      limits:
+        cpu: "4"
+        memory: 8Gi
+    concurrency: [5, 10]
+    max_seconds: 60
+
+workload:
+  benchmark_profiles:
+    - balanced
+
+constraints:
+  max_tensor_parallel_size: 1
+
+runtime:
+  base_vllm_args:
+    - --gpu-memory-utilization=0.90
+    - --trust-remote-code
