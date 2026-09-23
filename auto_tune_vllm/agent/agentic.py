@@ -40,7 +40,8 @@ TOOLS AVAILABLE:
 - run_command: Execute shell commands on the vLLM pod/host (runs REMOTELY on pod)
 - read_file: Read files from the vLLM pod/host (runs REMOTELY on pod)
 - write_file: Write files to the vLLM pod/host (runs REMOTELY on pod)
-- run_benchmark: Run GuideLLM benchmark (runs LOCALLY, hits the port-forwarded endpoint)
+- run_benchmark: Run the LOCKED GuideLLM test (warmup then scored run).
+  Workload is fixed for the session. Pass endpoint for experiment pods; omit for baseline.
 - fetch_vllm_logs: Fetch + parse vLLM logs from pod with 120+ regex patterns (runs REMOTELY)
 - read_benchmark_results: Read a GuideLLM JSON file and extract structured metrics (runs LOCALLY)
 - compare_benchmarks: Compare two benchmark JSON files to detect regressions (runs LOCALLY)
@@ -57,29 +58,23 @@ ARCHITECTURE:
   Pass pod_name to target an experiment pod; omit to target the baseline pod.
 - run_benchmark runs LOCALLY. Pass endpoint from create_vllm_pod to benchmark
   an experiment pod; omit endpoint to benchmark the baseline.
-- run_benchmark model is AUTO-FILLED — just specify the profile name (and endpoint if experiment).
+- run_benchmark model is AUTO-FILLED. Do NOT change profile, ISL/OSL, or concurrency.
+  An unscored warmup (fixed concurrency, short duration or N requests) runs automatically
+  before every scored test. Only pass endpoint when benchmarking an experiment pod.
 
 TUNING WORKFLOW (follow this order strictly):
 
-0. FIRST, look up the vLLM recipes page for model-specific optimizations:
-   a. Run: run_command with command="curl -s https://recipes.vllm.ai/models.json"
-      This returns a JSON array of all models with recipes. Search for an entry
-      whose "hf_id" matches (or is close to) the model being served.
-   b. If a match is found, fetch the model recipe:
-      run_command with command="curl -s https://recipes.vllm.ai/{hf_id}.json"
-      (e.g. "curl -s https://recipes.vllm.ai/meta-llama/Llama-3.1-8B-Instruct.json")
-   c. The recipe JSON contains:
-      - model.base_args: recommended base vLLM args
-      - variants: precision/quantization options (e.g. fp8, nvfp4) with extra_args
-      - hardware_overrides: hardware-specific args (e.g. for AMD)
-      - features / opt_in_features: optional features to enable
-   d. Use the recipe's recommended args as your FIRST experiment. Then build on
-      top of them with additional tuning.
-   e. If curl fails (no internet on the pod), skip this step and proceed with
-      the known-good practices listed below.
+0. CHECK YOUR INITIAL CONTEXT for the PRE-FETCHED vLLM RECIPE block.
+   The controller fetched recipes.vllm.ai at startup and injected the recipe
+   (base_args, hardware-specific args, variants, spec_decoding) directly into
+   your first message — you do NOT need to curl anything.
+   - If the recipe block is present: use the FIRST EXPERIMENT args as your
+     initial create_vllm_pod call. Then build on top with variants.
+   - If the initial context says "no recipe found": skip this step and use the
+     KNOWN-GOOD TUNING PRACTICES below as your first experiment.
 
 1. Benchmark the BASELINE pod (already running, uses default endpoint):
-   a. Call run_benchmark with profile="balanced" (no endpoint needed — uses baseline)
+   a. Call run_benchmark (no profile needed — the session workload is locked)
    b. Call fetch_vllm_logs (no pod_name — reads baseline pod logs)
    c. Call read_benchmark_results with the JSON path from step 1a
    → Save the baseline JSON path for later comparison.
@@ -87,7 +82,7 @@ TUNING WORKFLOW (follow this order strictly):
 2. For EACH tuning experiment:
    a. Call create_vllm_pod with vllm_args (e.g. ["--enable-chunked-prefill"])
       → Returns pod_name and endpoint (e.g. "http://localhost:8001")
-   b. Call run_benchmark with profile="balanced" AND endpoint from step 2a
+   b. Call run_benchmark AND endpoint from step 2a (same locked workload + warmup)
    c. Call fetch_vllm_logs with pod_name from step 2a (reads experiment pod logs)
    d. Call read_benchmark_results with the JSON path from step 2b
    e. Call compare_benchmarks with baseline JSON (from step 1c) and experiment JSON (from step 2d)
@@ -168,13 +163,19 @@ ANALYSIS GUIDELINES:
 
 STOPPING CRITERIA:
 - Keep running experiments until you have had 10 CONSECUTIVE experiments with NO
-  improvement over your current best result. Only then call done.
+  improvement over your current best result. Only then proceed to verification.
 - Track a running count of consecutive non-improving experiments. Any experiment
   that improves throughput OR latency (TTFT/ITL/TPOT) by more than 2% resets
   the counter to zero.
 - Do NOT stop early just because one or two experiments didn't help. Keep exploring
   different parameter combinations.
-- When you do call done, include ALL experiment results (not just the best one).
+
+FINAL VERIFICATION (before calling done):
+- Once you have identified the best configuration, call run_benchmark with
+  repeat=3 on that configuration to verify reproducibility.
+- This runs the scored test 3 times and returns mean ± stddev per metric.
+- A coefficient of variation (CV) below 5% on throughput indicates a stable result.
+- When you do call done, include ALL experiment results AND the verification stats.
 
 REPORTING FORMAT:
 - Format your done summary as structured text with clear sections:
@@ -204,28 +205,39 @@ class AgenticRunner:
         model_name: str = "",
         profiles: list = None,
         enable_cost_optimization: bool = True,
+        workload_description: str = "",
+        vllm_recipe: dict = None,
     ):
         self.tools = tools
         self.llm = llm_client
         self.max_iterations = max_iterations
         self.vllm_endpoint = vllm_endpoint
         self.model_name = model_name
-        self.profiles = profiles or [
-            "balanced",
-            "decode_heavy",
-            "prefill_heavy",
-            "long_context",
-        ]
+        self.profiles = profiles or ["balanced"]
+        self.workload_description = workload_description or (
+            f"profiles={', '.join(self.profiles)}"
+        )
         self.state = AgentState()
         self.messages: list = []
         self.decision_log: list = []
         self.enable_cost_optimization = enable_cost_optimization
         self._benchmark_called = False
         self._nudge_sent = False
+        self.vllm_recipe = vllm_recipe
 
     def run(self) -> AgentState:
         """Run the autonomous agent loop."""
         print(">> Starting vLLM performance tuning agent...", flush=True)
+
+        # Build recipe block for injection into the first user message
+        if self.vllm_recipe:
+            from .recipe_fetcher import format_recipe_briefing
+            recipe_block = "\n" + format_recipe_briefing(self.vllm_recipe) + "\n"
+        else:
+            recipe_block = (
+                "\nNO vLLM RECIPE FOUND for this model in recipes.vllm.ai. "
+                "Apply KNOWN-GOOD TUNING PRACTICES as your first experiment.\n"
+            )
 
         # Initialize conversation
         self.messages = [
@@ -235,13 +247,15 @@ class AgenticRunner:
 
 Baseline endpoint (port-forwarded): {self.vllm_endpoint}
 Model: {self.model_name}
-Profiles to benchmark: {", ".join(self.profiles)}
+LOCKED WORKLOAD (do not change): {self.workload_description}
+{recipe_block}
 
 CRITICAL RULES:
 - The BASELINE pod is NEVER modified or restarted. It serves as your reference.
 - To test tuning parameters, create EXPERIMENT pods with create_vllm_pod.
-- For baseline benchmarks, call run_benchmark with just profile (endpoint auto-filled).
+- For baseline benchmarks, call run_benchmark with no extra args (endpoint auto-filled).
 - For experiment benchmarks, pass the endpoint returned by create_vllm_pod.
+- Do NOT pick a different profile, ISL/OSL, or concurrency. Warmup is automatic.
 - NEVER call done after a benchmark failure. Diagnose from vLLM logs instead.
 
 EXACT STEPS (follow this order strictly):
@@ -249,7 +263,7 @@ EXACT STEPS (follow this order strictly):
 Phase 1 — Baseline:
 1. Call run_command with command="nvidia-smi" (1 tool call)
 2. Call run_command with command="cat /proc/1/cmdline | tr '\\0' ' '" (see vLLM launch args)
-3. Call run_benchmark with profile="balanced" (THIS IS MANDATORY ON STEP 3 — uses baseline)
+3. Call run_benchmark (THIS IS MANDATORY ON STEP 3 — uses baseline + locked workload)
 4. AFTER benchmark completes, ALWAYS call BOTH:
    a. fetch_vllm_logs (parses baseline pod's vLLM server config, memory, errors)
    b. read_benchmark_results with the JSON path from step 3 output
@@ -258,7 +272,7 @@ Phase 1 — Baseline:
 Phase 2 — Experiments (repeat for each tuning attempt):
 5. Call create_vllm_pod with vllm_args (e.g. ["--enable-chunked-prefill"])
    → Note the returned pod_name and endpoint
-6. Call run_benchmark with profile="balanced" AND endpoint from step 5
+6. Call run_benchmark with endpoint from step 5 (same locked workload + warmup)
 7. Call fetch_vllm_logs with pod_name from step 5
 8. Call read_benchmark_results with the JSON path from step 6
 9. Call compare_benchmarks with baseline JSON (step 4b) and experiment JSON (step 8)
@@ -291,28 +305,12 @@ Steps 4a/4b (and 7/8 for experiments) are MANDATORY after every benchmark.""",
                         "role": "user",
                         "content": (
                             "STOP EXPLORING. You have spent enough iterations on system discovery. "
-                            'Call the run_benchmark tool NOW with profile="balanced". '
-                            "Do NOT call run_command again until you have benchmark results. "
-                            "The endpoint and model are auto-filled — just specify the profile."
+                            "Call the run_benchmark tool NOW (no profile arg — workload is locked). "
+                            "Do NOT call run_command again until you have benchmark results."
                         ),
                     }
                 )
                 print("   [Nudge injected: forcing benchmark]", flush=True)
-
-            # Budget warning: when approaching iteration cap, force report save
-            remaining = self.max_iterations - self.state.iteration
-            if remaining == 5:
-                self.messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "WARNING: Only 5 iterations remaining. "
-                            "Call done NOW with all findings so far. "
-                            "Include baseline metrics, experiment results, and comparisons."
-                        ),
-                    }
-                )
-                print("   [Budget warning: 5 iterations left]", flush=True)
 
             # Call LLM with tools
             response = self._call_llm_with_tools()
@@ -477,12 +475,15 @@ Steps 4a/4b (and 7/8 for experiments) are MANDATORY after every benchmark.""",
                 content.append({"type": "text", "text": block.text})
                 print(f"   Agent: {block.text[:120]}...", flush=True)
             elif block.type == "tool_use":
+                raw_input = block.input
+                if isinstance(raw_input, dict):
+                    raw_input = dict(raw_input)
                 content.append(
                     {
                         "type": "tool_use",
                         "id": block.id,
                         "name": block.name,
-                        "input": block.input,
+                        "input": raw_input,
                     }
                 )
 
