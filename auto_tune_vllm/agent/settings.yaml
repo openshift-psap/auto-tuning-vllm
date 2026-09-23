@@ -35,8 +35,22 @@ profiles:
     samples: 10
     description: "Long-context workload (ISL=16384, OSL=1024)"
 
-# Default sweep used by run_benchmark. Override per-call with the concurrency arg.
-default_concurrency_levels: [1, 50]
+# Locked scored test. Baseline and every experiment use this (not chosen by the agent).
+benchmark:
+  profile: balanced
+  concurrency_levels: [50]
+  max_seconds: 60
+
+# Unscored load before every scored run. Duration (seconds) or request count.
+# If requests is set, it takes precedence over seconds.
+warmup:
+  enabled: true
+  concurrency: 8
+  seconds: 15
+  requests: null
+
+# Default sweep used if CLI omits --concurrency.
+default_concurrency_levels: [50]
 
 # Full sweep kept for reference if you want a wider load test.
 concurrency_levels: [1, 50, 100, 200, 300, 500, 650]

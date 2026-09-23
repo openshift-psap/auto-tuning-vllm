@@ -1,0 +1,73 @@
+# HERA (psap-hera) experiment template: 1x H200, Gemma 4 26B A4B FP8.
+# Baseline is never modified. Each experiment clones this, appends extra vLLM args,
+# benchmarks, then deletes.
+#
+# Requires: namespace auto-tune, PVC model-cache, secret hf-token.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-tune-experiment
+  labels:
+    app: auto-tune-vllm
+    vllm-experiment: "true"
+spec:
+  restartPolicy: Never
+  containers:
+    - name: vllm
+      image: vllm/vllm-openai:v0.29.0
+      command: ["vllm", "serve"]
+      args:
+        - --model
+        - /models/gemma
+        - --served-model-name
+        - RedHatAI/gemma-4-26B-A4B-it-FP8-Dynamic
+        - --port
+        - "8000"
+        - --tensor-parallel-size
+        - "1"
+        - --gpu-memory-utilization
+        - "0.90"
+        - --trust-remote-code
+        - --host
+        - "0.0.0.0"
+      env:
+        - name: HF_HOME
+          value: /models/.hf
+        - name: HUGGING_FACE_HUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: HF_TOKEN
+              optional: true
+      ports:
+        - containerPort: 8000
+          name: http
+      resources:
+        requests:
+          cpu: "100m"
+          memory: 16Gi
+          nvidia.com/gpu: "1"
+        limits:
+          nvidia.com/gpu: "1"
+      securityContext:
+        privileged: true
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 8000
+        initialDelaySeconds: 60
+        periodSeconds: 10
+        failureThreshold: 90
+      volumeMounts:
+        - name: model-cache
+          mountPath: /models
+        - name: shm
+          mountPath: /dev/shm
+  volumes:
+    - name: model-cache
+      persistentVolumeClaim:
+        claimName: model-cache
+    - name: shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 16Gi
