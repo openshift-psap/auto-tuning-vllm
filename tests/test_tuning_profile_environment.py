@@ -6,7 +6,8 @@ import json
 from types import SimpleNamespace
 
 from auto_tune_vllm.agent.environment import render_environment_resources
-from auto_tune_vllm.agent.provision import _job_complete
+from auto_tune_vllm.agent.main import write_controller_metadata
+from auto_tune_vllm.agent.provision import _job_complete, cleanup_baseline
 from auto_tune_vllm.agent.tuning_profile import TuningProfile
 
 
@@ -78,3 +79,53 @@ def test_job_complete_recognizes_completed_download(monkeypatch):
     monkeypatch.setattr("auto_tune_vllm.agent.provision._oc", fake_oc)
 
     assert _job_complete("kubeconfig", "namespace", "download-model")
+
+
+def test_cleanup_baseline_deletes_only_deployment_and_service(monkeypatch):
+    calls = []
+
+    def fake_oc(kubeconfig, args, **_kwargs):
+        calls.append((kubeconfig, args))
+        return SimpleNamespace(returncode=0, stdout="")
+
+    monkeypatch.setattr("auto_tune_vllm.agent.provision._oc", fake_oc)
+
+    cleanup_baseline(
+        kubeconfig="kubeconfig",
+        namespace="namespace",
+        deployment="model-baseline",
+        service="model-baseline",
+    )
+
+    assert calls == [
+        (
+            "kubeconfig",
+            ["delete", "deployment", "model-baseline", "-n", "namespace", "--wait=true"],
+        ),
+        (
+            "kubeconfig",
+            ["delete", "service", "model-baseline", "-n", "namespace", "--wait=true"],
+        ),
+    ]
+
+
+def test_controller_metadata_excludes_credentials(tmp_path):
+    args = SimpleNamespace(
+        controller_metadata_dir=tmp_path,
+        oc_namespace="test",
+        model="org/model",
+        vllm_version="0.24.0",
+        recipe_hardware="H200",
+        profiles=["long_context_16k_1k"],
+        max_iterations=100,
+        benchmark_config={"concurrency": [1, 50]},
+        cleanup_baseline_after_benchmark=True,
+        api_key="must-not-appear",
+    )
+
+    path = write_controller_metadata(args)
+
+    assert path is not None
+    recorded = path.read_text(encoding="utf-8")
+    assert "must-not-appear" not in recorded
+    assert '"event": "controller_started"' in recorded

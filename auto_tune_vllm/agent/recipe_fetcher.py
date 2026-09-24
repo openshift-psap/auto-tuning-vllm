@@ -1,9 +1,8 @@
 """
 Fetch and parse vLLM serving recipes from recipes.vllm.ai.
 
-Called once at agent startup on the controller — not from inside the pod.
-Returns a structured briefing that is injected into the agent's first message,
-so Claude sees the full recipe without token truncation.
+Called by the agent's controller-side recipe tool — never from inside a cluster
+pod. Returns a structured, version-checked briefing for the agent.
 """
 
 from __future__ import annotations
@@ -104,9 +103,21 @@ def _extract_spec_decoding(recipe: dict) -> Optional[dict]:
     return None
 
 
+def is_vllm_version_compatible(runtime_version: str, minimum_version: str) -> bool:
+    """Compare vLLM release versions without accepting prerelease shortcuts."""
+    def parts(version: str) -> tuple[int, ...]:
+        return tuple(int(part) for part in version.lstrip("v").split(".")[:3])
+
+    try:
+        return parts(runtime_version) >= parts(minimum_version)
+    except ValueError:
+        return False
+
+
 def fetch_vllm_recipe(
     model_id: str,
     hardware: str = "H200",
+    runtime_vllm_version: str | None = None,
     timeout: int = 10,
 ) -> Optional[dict]:
     """Fetch and parse the vLLM recipe for *model_id* from recipes.vllm.ai.
@@ -127,15 +138,28 @@ def fetch_vllm_recipe(
     if not isinstance(recipe, dict):
         return None
 
+    minimum_version = recipe.get("model", {}).get("min_vllm_version")
+    compatible = (
+        not isinstance(minimum_version, str)
+        or runtime_vllm_version is None
+        or is_vllm_version_compatible(runtime_vllm_version, minimum_version)
+    )
     return {
         "matched_hf_id": hf_id,
-        "base_args": recipe.get("model", {}).get("base_args", []),
-        "recommended_command": recipe.get("model", {}).get("recommended_command", ""),
-        "variants": recipe.get("variants", {}),
-        "hardware_args": _extract_hardware_args(recipe, hardware),
-        "spec_decoding": _extract_spec_decoding(recipe),
-        "features": recipe.get("features", {}),
-        "opt_in_features": recipe.get("opt_in_features", {}),
+        "min_vllm_version": minimum_version,
+        "runtime_vllm_version": runtime_vllm_version,
+        "version_compatible": compatible,
+        "base_args": recipe.get("model", {}).get("base_args", []) if compatible else [],
+        "recommended_command": (
+            recipe.get("model", {}).get("recommended_command", "")
+            if compatible
+            else ""
+        ),
+        "variants": recipe.get("variants", {}) if compatible else {},
+        "hardware_args": _extract_hardware_args(recipe, hardware) if compatible else [],
+        "spec_decoding": _extract_spec_decoding(recipe) if compatible else None,
+        "features": recipe.get("features", {}) if compatible else {},
+        "opt_in_features": recipe.get("opt_in_features", {}) if compatible else {},
     }
 
 
@@ -143,6 +167,12 @@ def format_recipe_briefing(recipe: dict, hardware: str = "H200") -> str:
     """Format a recipe dict into a structured briefing block for the agent."""
     hf_id = recipe["matched_hf_id"]
     lines = [f"=== PRE-FETCHED vLLM RECIPE: {hf_id} (hardware: {hardware}) ==="]
+    if not recipe.get("version_compatible", True):
+        lines.append(
+            "WARNING: Recipe requires vLLM "
+            f">= {recipe.get('min_vllm_version')}, but runtime is "
+            f"{recipe.get('runtime_vllm_version')}. Do not use recipe-only args."
+        )
 
     if recipe.get("recommended_command"):
         lines.append(f"\nRecommended serving command:\n  {recipe['recommended_command'][:300]}")
@@ -178,9 +208,14 @@ def format_recipe_briefing(recipe: dict, hardware: str = "H200") -> str:
         else:
             lines.append(f"  {sd}")
 
-    lines.append(
-        "\nINSTRUCTION: Use the FIRST EXPERIMENT args above as your initial experiment "
-        "(create_vllm_pod with those vllm_args). Then explore variants. "
-        "Do NOT curl recipes.vllm.ai from the pod — this recipe is already complete."
-    )
+    if recipe.get("version_compatible", True):
+        lines.append(
+            "\nINSTRUCTION: Use the first experiment args above as your initial "
+            "experiment (create_vllm_pod with those vllm_args). Then explore variants."
+        )
+    else:
+        lines.append(
+            "\nINSTRUCTION: This recipe is incompatible with the running vLLM "
+            "version. Do not derive an experiment from it."
+        )
     return "\n".join(lines)

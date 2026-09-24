@@ -6,6 +6,7 @@ optimization:
 # The source of truth for this complete agentic-tuning environment.
 environment:
   namespace: agentic-tuning-32k1k
+  hardware: H200
   node_selector:
     kubernetes.io/hostname: psap-de-h200-cluster-6mgmp-gpu-h200-7zgjh
   image: vllm/vllm-openai:v0.24.0
@@ -24,6 +25,7 @@ environment:
   download_job_name: download-gemma-4-26b
   baseline:
     name: gemma-4-tp4-baseline
+    cleanup_after_benchmark: true
     resources:
       cpu: "32"
       memory: 128Gi

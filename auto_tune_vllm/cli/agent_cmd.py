@@ -124,6 +124,11 @@ def agent_command(
         "--mlflow-workspace",
         help="MLflow workspace name (default: $MLFLOW_WORKSPACE)",
     ),
+    controller_metadata_dir: str = typer.Option(
+        "/tmp/agentic-tuning-controller",
+        "--controller-metadata-dir",
+        help="Directory for credential-free controller invocation metadata logs.",
+    ),
 ):
     """Run the Claude-driven pod-per-experiment vLLM tuner.
 
@@ -134,6 +139,10 @@ def agent_command(
     port_forward = None
     benchmark_config = None
     benchmark_target = None
+    curl_cache_pvc_name = None
+    vllm_version = None
+    recipe_hardware = "H200"
+    cleanup_baseline_after_benchmark = False
     optimization_objective = "throughput"
     if tuning_profile:
         from ..agent.tuning_profile import load_tuning_profile
@@ -167,10 +176,20 @@ def agent_command(
             baseline = environment.get("baseline")
             benchmark_config = environment.get("benchmark")
             model_config = environment.get("model")
+            cache_config = environment.get("cache")
+            image = environment.get("image")
+            configured_hardware = environment.get("hardware")
+            if isinstance(configured_hardware, str) and configured_hardware:
+                recipe_hardware = configured_hardware
+            if isinstance(image, str) and ":v" in image:
+                vllm_version = image.rsplit(":v", 1)[1]
             if not isinstance(baseline, dict) or not isinstance(model_config, dict):
                 raise typer.BadParameter(
                     "Profile environment needs baseline and model mappings"
                 )
+            cleanup_baseline_after_benchmark = bool(
+                baseline.get("cleanup_after_benchmark", False)
+            )
             baseline_name = baseline.get("name")
             profile_model = model_config.get("id")
             if not isinstance(baseline_name, str) or not isinstance(profile_model, str):
@@ -181,6 +200,10 @@ def agent_command(
                 raise typer.BadParameter(
                     "Profile environment needs a benchmark mapping"
                 )
+            if isinstance(cache_config, dict):
+                cache_pvc_name = cache_config.get("pvc_name")
+                if isinstance(cache_pvc_name, str) and cache_pvc_name:
+                    curl_cache_pvc_name = cache_pvc_name
             benchmark_target = f"http://{baseline_name}:8000"
 
             template_path = Path(".auto_tune") / f"{profile.name}-experiment-pod.yaml"
@@ -249,7 +272,11 @@ def agent_command(
         pod_template=pod_template,
         benchmark_config=benchmark_config,
         benchmark_target=benchmark_target,
+        curl_cache_pvc_name=curl_cache_pvc_name,
         optimization_objective=optimization_objective,
+        vllm_version=vllm_version,
+        recipe_hardware=recipe_hardware,
+        cleanup_baseline_after_benchmark=cleanup_baseline_after_benchmark,
         vertex=(
             vertex
             if vertex is not None
@@ -261,6 +288,7 @@ def agent_command(
         mlflow_uri=mlflow_uri or os.environ.get("MLFLOW_TRACKING_URI"),
         mlflow_experiment=mlflow_experiment,
         mlflow_workspace=mlflow_workspace or os.environ.get("MLFLOW_WORKSPACE"),
+        controller_metadata_dir=controller_metadata_dir,
     )
     try:
         run_agent(args)

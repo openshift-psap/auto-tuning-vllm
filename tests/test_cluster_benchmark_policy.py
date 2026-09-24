@@ -1,7 +1,7 @@
 """Study-level consistency checks for cluster GuideLLM benchmarks."""
 
 from auto_tune_vllm.agent.benchmark_job import ClusterBenchmarkRunner
-from auto_tune_vllm.agent.tools import _handle_run_benchmark
+from auto_tune_vllm.agent.tools import ClusterCurlExecutor, _handle_run_benchmark
 
 
 class FakeRunner:
@@ -78,3 +78,14 @@ Server Throughput Statistics
     assert metrics["concurrency_1_output_tokens_per_second"] == 237.2
     assert metrics["concurrency_50_ttft_p95_ms"] == 11365.8
     assert metrics["concurrency_50_itl_p50_ms"] == 14.8
+
+
+def test_curl_pod_manifest_mounts_model_cache_without_overrides():
+    manifest = ClusterCurlExecutor("test", cache_pvc_name="models")._build_manifest(
+        "agent-curl-test", "ls /models"
+    )
+
+    container = manifest["spec"]["containers"][0]
+    assert container["image"] == "curlimages/curl:8.10.1"
+    assert container["volumeMounts"][0]["readOnly"] is True
+    assert manifest["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"] == "models"

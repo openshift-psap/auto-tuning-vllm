@@ -24,6 +24,24 @@ class ProvisionedEnvironment:
     experiment_template: Path
 
 
+def cleanup_baseline(
+    *, kubeconfig: str, namespace: str, deployment: str, service: str
+) -> None:
+    """Remove a study's baseline once its benchmark result is recorded.
+
+    The cache PVC is deliberately not touched. A deletion error is propagated so
+    the controller stops rather than starting trials while reserved GPUs remain.
+    """
+    _oc(
+        kubeconfig,
+        ["delete", "deployment", deployment, "-n", namespace, "--wait=true"],
+    )
+    _oc(
+        kubeconfig,
+        ["delete", "service", service, "-n", namespace, "--wait=true"],
+    )
+
+
 @dataclass
 class BaselinePortForward:
     """A local port-forward to the profile's baseline service."""

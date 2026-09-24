@@ -55,6 +55,7 @@ import yaml
 
 from .benchmark_job import ClusterBenchmarkRunner
 from .pod_manager import PodManager
+from .recipe_fetcher import fetch_vllm_recipe, format_recipe_briefing
 from .ssh_client import SSHClient
 
 # ---------------------------------------------------------------------------
@@ -250,24 +251,103 @@ class OcExecutor(RemoteExecutor):
 class ClusterCurlExecutor(RemoteExecutor):
     """Run an HTTP diagnostic command in a disposable in-cluster curl pod."""
 
-    def __init__(self, namespace: str, kubeconfig: Optional[str] = None):
+    def __init__(
+        self,
+        namespace: str,
+        kubeconfig: Optional[str] = None,
+        cache_pvc_name: Optional[str] = None,
+    ):
         self.namespace = namespace
         self.kubeconfig = kubeconfig
+        self.cache_pvc_name = cache_pvc_name
 
     def run(self, command: str, timeout: int = 60) -> CommandResult:
-        cmd = ["oc"]
+        pod_name = f"agent-curl-{int(time.time() * 1000)}"
+        manifest = self._build_manifest(pod_name, command)
+        oc_base = ["oc"]
         if self.kubeconfig:
-            cmd += ["--kubeconfig", self.kubeconfig]
-        cmd += [
-            "-n", self.namespace, "run", f"agent-curl-{int(time.time() * 1000)}",
-            "--image=curlimages/curl:8.10.1", "--restart=Never", "--rm", "-i",
-            "--attach", "--command", "--", "/bin/sh", "-c", command,
-        ]
+            oc_base += ["--kubeconfig", self.kubeconfig]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 30)
-            return CommandResult(result.stdout, result.stderr, result.returncode, result.returncode == 0)
+            applied = subprocess.run(
+                oc_base + ["-n", self.namespace, "apply", "-f", "-"],
+                input=json.dumps(manifest),
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if applied.returncode:
+                return CommandResult("", applied.stderr, applied.returncode, False)
+            completed = subprocess.run(
+                oc_base
+                + [
+                    "-n",
+                    self.namespace,
+                    "wait",
+                    "--for=jsonpath={.status.phase}=Succeeded",
+                    f"pod/{pod_name}",
+                    f"--timeout={timeout}s",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=timeout + 30,
+            )
+            logs = subprocess.run(
+                oc_base + ["-n", self.namespace, "logs", pod_name],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            deleted = subprocess.run(
+                oc_base + ["-n", self.namespace, "delete", "pod", pod_name, "--wait=true"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if deleted.returncode:
+                return CommandResult(
+                    logs.stdout,
+                    f"{logs.stderr}\n{deleted.stderr}",
+                    deleted.returncode,
+                    False,
+                )
+            return CommandResult(
+                logs.stdout,
+                logs.stderr or completed.stderr,
+                completed.returncode,
+                completed.returncode == 0,
+            )
         except subprocess.TimeoutExpired:
             return CommandResult("", f"in-cluster curl pod timed out after {timeout}s", -1, False)
+
+    def _build_manifest(self, pod_name: str, command: str) -> dict:
+        """Build the complete curl-pod specification without API overrides."""
+        container = {
+            "name": "curl",
+            "image": "curlimages/curl:8.10.1",
+            "command": ["/bin/sh", "-c", command],
+            "securityContext": {
+                "allowPrivilegeEscalation": False,
+                "capabilities": {"drop": ["ALL"]},
+                "readOnlyRootFilesystem": True,
+            },
+        }
+        spec = {
+            "restartPolicy": "Never",
+            "automountServiceAccountToken": False,
+            "securityContext": {"runAsNonRoot": True},
+            "containers": [container],
+        }
+        if self.cache_pvc_name:
+            spec["volumes"] = [
+                {
+                    "name": "model-cache",
+                    "persistentVolumeClaim": {"claimName": self.cache_pvc_name},
+                }
+            ]
+            container["volumeMounts"] = [
+                {"name": "model-cache", "mountPath": "/models", "readOnly": True}
+            ]
+        return {"apiVersion": "v1", "kind": "Pod", "metadata": {"name": pod_name}, "spec": spec}
 
     def read_file(self, path: str) -> CommandResult:
         return CommandResult("", "File reads are unavailable in curl pods.", -1, False)
@@ -325,6 +405,28 @@ PROFILE_CHOICES = list(BENCHMARK_PROFILES.keys()) or [
 # ---------------------------------------------------------------------------
 
 TOOL_DEFINITIONS: list[dict] = [
+    {
+        "name": "fetch_vllm_recipe",
+        "description": (
+            "Fetch the matched vLLM serving recipe on the controller and return a "
+            "version-checked briefing. If the recipe requires a newer vLLM release, "
+            "its arguments and features are withheld and a warning is returned."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "model_id": {
+                    "type": "string",
+                    "description": "Hugging Face model ID; defaults to the served model.",
+                },
+                "hardware": {
+                    "type": "string",
+                    "description": "GPU platform, such as H200; defaults to H200.",
+                },
+            },
+            "required": [],
+        },
+    },
     {
         "name": "run_command",
         "description": (
@@ -2049,6 +2151,59 @@ def _handle_search_vllm_prs(
         )
 
 
+def _handle_fetch_vllm_recipe(
+    args: dict,
+    _executor: RemoteExecutor,
+    command_history: list[dict],
+) -> ToolResult:
+    """Fetch a recipe on the controller and enforce its vLLM version floor."""
+    model_id = args.get("model_id")
+    hardware = args.get("hardware", "H200")
+    runtime_version = args.get("runtime_vllm_version")
+    if not isinstance(model_id, str) or not model_id:
+        return ToolResult(
+            tool="fetch_vllm_recipe",
+            success=False,
+            output="",
+            error="model_id is required to look up a vLLM recipe",
+        )
+    if not isinstance(hardware, str) or not hardware:
+        return ToolResult(
+            tool="fetch_vllm_recipe",
+            success=False,
+            output="",
+            error="hardware must be a non-empty string",
+        )
+
+    command_history.append(
+        {
+            "tool": "fetch_vllm_recipe",
+            "model_id": model_id,
+            "hardware": hardware,
+            "runtime_vllm_version": runtime_version,
+        }
+    )
+    recipe = fetch_vllm_recipe(
+        model_id=model_id,
+        hardware=hardware,
+        runtime_vllm_version=runtime_version,
+    )
+    if recipe is None:
+        command_history[-1]["success"] = False
+        return ToolResult(
+            tool="fetch_vllm_recipe",
+            success=False,
+            output="",
+            error=f"No vLLM recipe found for {model_id}, or recipes.vllm.ai is unavailable",
+        )
+    command_history[-1]["success"] = True
+    return ToolResult(
+        tool="fetch_vllm_recipe",
+        success=True,
+        output=format_recipe_briefing(recipe, hardware),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Dispatch table
 # ---------------------------------------------------------------------------
@@ -2068,6 +2223,7 @@ _TOOL_HANDLERS = {
     "delete_vllm_pod": _handle_delete_vllm_pod,
     "done": _handle_done,
     "search_vllm_prs": _handle_search_vllm_prs,
+    "fetch_vllm_recipe": _handle_fetch_vllm_recipe,
 }
 
 # Handlers that accept pod_manager as a keyword argument
@@ -2174,6 +2330,8 @@ class AgentTools:
         benchmark_runner: Optional[ClusterBenchmarkRunner] = None,
         benchmark_target: Optional[str] = None,
         command_executor: Optional[RemoteExecutor] = None,
+        vllm_version: Optional[str] = None,
+        hardware: str = "H200",
     ):
         self.executor = executor
         self.vllm_endpoint = vllm_endpoint
@@ -2184,6 +2342,8 @@ class AgentTools:
         self.benchmark_runner = benchmark_runner
         self.benchmark_target = benchmark_target
         self.command_executor = command_executor
+        self.vllm_version = vllm_version
+        self.hardware = hardware
         self.command_history: list[dict] = []
 
     def get_tool_definitions(self) -> list[dict]:
@@ -2218,6 +2378,10 @@ class AgentTools:
         elif name == "check_preemptions":
             if "endpoint" not in args or not args.get("endpoint"):
                 args["endpoint"] = self.vllm_endpoint  # baseline default
+        elif name == "fetch_vllm_recipe":
+            args.setdefault("model_id", self.model_name)
+            args.setdefault("hardware", self.hardware)
+            args.setdefault("runtime_vllm_version", self.vllm_version)
         selected_executor = (
             self.command_executor
             if name == "run_command" and self.command_executor is not None

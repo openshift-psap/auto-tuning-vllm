@@ -8,6 +8,8 @@ import atexit
 import json
 import os
 import sys
+from datetime import UTC, datetime
+from pathlib import Path
 
 from .agentic import AgenticRunner
 from .benchmark_job import ClusterBenchmarkRunner
@@ -16,6 +18,36 @@ from .pod_manager import PodManager
 from .reporter import Reporter, TuningReport
 from .ssh_client import SSHClient
 from .tools import ClusterCurlExecutor, PROFILE_CHOICES, AgentTools, OcExecutor, SSHExecutor
+
+
+def write_controller_metadata(args) -> Path | None:
+    """Write a credential-free controller invocation record when configured."""
+    metadata_dir = getattr(args, "controller_metadata_dir", None)
+    if not metadata_dir:
+        return None
+
+    log_dir = Path(metadata_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(UTC)
+    log_path = log_dir / f"controller-{timestamp.strftime('%Y%m%dT%H%M%SZ')}.jsonl"
+    metadata = {
+        "event": "controller_started",
+        "timestamp": timestamp.isoformat(),
+        "pid": os.getpid(),
+        "namespace": getattr(args, "oc_namespace", None),
+        "model": getattr(args, "model", None),
+        "vllm_version": getattr(args, "vllm_version", None),
+        "recipe_hardware": getattr(args, "recipe_hardware", None),
+        "profiles": getattr(args, "profiles", None),
+        "max_iterations": getattr(args, "max_iterations", None),
+        "benchmark_config": getattr(args, "benchmark_config", None),
+        "cleanup_baseline_after_benchmark": getattr(
+            args, "cleanup_baseline_after_benchmark", False
+        ),
+    }
+    log_path.write_text(json.dumps(metadata, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"Controller metadata log: {log_path}")
+    return log_path
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -167,6 +199,8 @@ def print_step(msg: str):
 def run_agent(args) -> None:
     """Run the agent loop from a parsed argparse namespace (or equivalent)."""
 
+    write_controller_metadata(args)
+
     # Validate API key (only required when NOT using Vertex AI)
     if not args.vertex and not args.api_key:
         print(
@@ -308,10 +342,16 @@ def run_agent(args) -> None:
         benchmark_runner=benchmark_runner,
         benchmark_target=benchmark_target,
         command_executor=(
-            ClusterCurlExecutor(args.oc_namespace, args.kubeconfig)
+            ClusterCurlExecutor(
+                args.oc_namespace,
+                args.kubeconfig,
+                getattr(args, "curl_cache_pvc_name", None),
+            )
             if args.oc_mode
             else None
         ),
+        vllm_version=getattr(args, "vllm_version", None),
+        hardware=getattr(args, "recipe_hardware", "H200"),
     )
 
     baseline_summary = None
@@ -349,6 +389,16 @@ def run_agent(args) -> None:
             print(f"Error: Baseline benchmark Job failed: {baseline.error}")
             sys.exit(1)
         baseline_summary = baseline.output
+        if getattr(args, "cleanup_baseline_after_benchmark", False):
+            from .provision import cleanup_baseline
+
+            print_step("Baseline benchmark recorded; releasing baseline resources...")
+            cleanup_baseline(
+                kubeconfig=args.kubeconfig,
+                namespace=args.oc_namespace,
+                deployment=args.oc_pod.removeprefix("deployment/"),
+                service=benchmark_target.removeprefix("http://").split(":", 1)[0],
+            )
 
     agent = AgenticRunner(
         llm_client=llm,
@@ -360,6 +410,7 @@ def run_agent(args) -> None:
         max_tensor_parallel_size=getattr(args, "max_tensor_parallel_size", None),
         baseline_summary=baseline_summary,
         optimization_objective=getattr(args, "optimization_objective", "throughput"),
+        vllm_version=getattr(args, "vllm_version", None),
     )
 
     # Run the agent loop

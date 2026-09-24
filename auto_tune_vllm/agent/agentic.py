@@ -38,13 +38,15 @@ ENVIRONMENT:
   `uv run python script.py`. Do NOT use raw pip or conda for installing packages.
 
 TOOLS AVAILABLE:
-- run_command: Execute HTTP diagnostics in a disposable in-cluster curl pod
+- run_command: Execute diagnostics in a disposable in-cluster curl pod. It has
+  the model-cache PVC mounted read-only at /models.
 - read_file: Read files from the vLLM pod/host (runs REMOTELY on pod)
 - write_file: Write files to the vLLM pod/host (runs REMOTELY on pod)
 - run_benchmark: Run GuideLLM benchmark as an in-cluster Job; it returns comparison-ready metrics
 - fetch_vllm_logs: Fetch + parse vLLM logs from pod with 120+ regex patterns (runs REMOTELY)
 - analyze_trace: Analyze a PyTorch profiler Chrome trace JSON (runs LOCALLY)
 - map_kernel: Map a CUDA kernel name to its source and category (runs LOCALLY)
+- fetch_vllm_recipe: Fetch a model recipe on the controller with version compatibility enforcement
 - search_vllm_prs: Search the local index of merged vLLM PRs for relevant tuning work
 - create_vllm_pod: Create an experiment pod with extra vLLM args (returns pod_name + endpoint)
 - delete_vllm_pod: Delete an experiment pod and clean up port-forward
@@ -62,35 +64,17 @@ ARCHITECTURE:
 TUNING WORKFLOW (follow this order strictly):
 
 0. FIRST, look up vLLM Recipes for model-specific optimizations:
-   a. Run: run_command with command="curl -s https://recipes.vllm.ai/models.json"
-      This generated catalog is sourced from https://github.com/vllm-project/recipes.
-      Search for an entry whose "hf_id" matches (or is close to) the model being
-      served.
-   b. If there is no exact match, check the source recipes repository for the
-      served model's family or architecture before falling back to generic advice:
-      - Inspect https://github.com/vllm-project/recipes/tree/main/models for YAML
-        recipes whose directory or filename matches the model family (for example,
-        Llama, Qwen, Mistral, DeepSeek, MoE, or VLM).
-      - Fetch each promising YAML from raw.githubusercontent.com and extract its
-        model.base_args, variants, hardware_overrides, features, and
-        opt_in_features.
-      - Treat a family-level recipe as a lead, not proof: only retain its arguments
-        after the isolated experiment has been benchmarked against the baseline.
-      - If GitHub is unreachable, continue with the generated catalog and known-good
-        practices below.
-   c. If an exact catalog match is found, fetch the model recipe:
-      run_command with command="curl -s https://recipes.vllm.ai/{hf_id}.json"
-      (e.g. "curl -s https://recipes.vllm.ai/meta-llama/Llama-3.1-8B-Instruct.json")
-   d. The recipe JSON contains:
+   a. Call fetch_vllm_recipe. It queries the generated catalog sourced from
+      https://github.com/vllm-project/recipes and returns the closest model match.
+   b. The recipe briefing contains:
       - model.base_args: recommended base vLLM args
       - variants: precision/quantization options (e.g. fp8, nvfp4) with extra_args
       - hardware_overrides: hardware-specific args (e.g. for AMD)
       - features / opt_in_features: optional features to enable
-   e. Use the recipe's recommended args as your FIRST experiment. Then build on
-      top of them with additional tuning.
-   f. If curl fails (no internet on the pod), skip this step and proceed with
-      the known-good practices listed below.
-   g. If search_vllm_prs is available, search it for the served model architecture,
+   c. If it reports a version warning, do not use its withheld arguments or
+      features; report the incompatibility and restrict experiments to arguments
+      confirmed for the running version.
+   d. If search_vllm_prs is available, search it for the served model architecture,
       hardware, and current bottleneck. It is a local, read-only index of merged
       vLLM PRs; use returned PRs as leads, then validate every idea by benchmarking.
 
@@ -223,6 +207,7 @@ class AgenticRunner:
         max_tensor_parallel_size: int | None = None,
         baseline_summary: str | None = None,
         optimization_objective: str = "throughput",
+        vllm_version: str | None = None,
     ):
         self.tools = tools
         self.llm = llm_client
@@ -242,6 +227,7 @@ class AgenticRunner:
         self.max_tensor_parallel_size = max_tensor_parallel_size
         self.baseline_summary = baseline_summary
         self.optimization_objective = optimization_objective
+        self.vllm_version = vllm_version
         # A deterministic baseline Job has already exercised the benchmark path.
         self._benchmark_called = baseline_summary is not None
         self._nudge_sent = False
@@ -282,6 +268,7 @@ Model: {self.model_name}
 Profiles to benchmark: {", ".join(self.profiles)}
 Runtime constraints: {runtime_constraints}
 Optimization objective: {self.optimization_objective}
+Runtime vLLM version: {self.vllm_version or "unknown"}
 Recipe search priority: {recipe_priority}
 MTP/speculative decoding is the default whenever the recipe or architecture
 confirms support. First ensure the isolated pod can start with that configuration,
@@ -290,6 +277,9 @@ If a verified recipe requires a public or authorized assistant/draft checkpoint
 that is absent from the mounted cache, you MAY configure vLLM to download that
 checkpoint in the isolated experiment pod. Do not skip MTP merely because the
 draft model is not already cached.
+RECIPE VERSION GUARD: fetch_vllm_recipe checks model.min_vllm_version against
+the runtime and withholds incompatible recipe arguments. Do not recover those
+arguments from another source or use them in an experiment.
 
 CRITICAL RULES:
 - The BASELINE pod is NEVER modified or restarted. It serves as your reference.

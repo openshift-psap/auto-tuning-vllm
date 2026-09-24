@@ -27,8 +27,8 @@
     .cover h1 { margin:0; color:#fff; font-size:clamp(29px,3.75vw,60px); line-height:1.15; font-weight:700; letter-spacing:-.04em; }
     .cover p { margin:1.1em 0 0; color:#f1edff; font-size:clamp(12px,1.45vw,23px); line-height:1.35; }
     h2 { margin:0 0 .55em; color:var(--lavender); font-size:clamp(21px,2.25vw,36px); line-height:1.16; font-weight:500; letter-spacing:-.025em; }
-    h3 { margin:0 0 .55em; font-size:clamp(11px,1.14vw,18px); font-weight:600; color:#40444b; }
-    p,li,td,th { font-size:clamp(10px,1.02vw,16px); line-height:1.44; }
+    h3 { margin:0 0 .5em; font-size:clamp(15px,1.27vw,21px); font-weight:600; color:#40444b; }
+    p,li,td,th { font-size:clamp(13px,1.16vw,19px); line-height:1.34; }
     p { margin:.25em 0 .65em; }
     .sub { max-width:93%; color:#666b70; font-size:clamp(11px,1.16vw,18px); margin:-.18em 0 1.05em; }
     .kicker { font:600 clamp(9px,.79vw,13px) "IBM Plex Mono",monospace; color:var(--purple); text-transform:uppercase; letter-spacing:.08em; margin-bottom:.8em; }
@@ -42,21 +42,23 @@
     .label { color:var(--purple); font:600 clamp(9px,.77vw,12px) "IBM Plex Mono",monospace; text-transform:uppercase; letter-spacing:.04em; }
     .mono,code,pre { font-family:"IBM Plex Mono",Consolas,monospace; }
     code { font-size:.9em; background:#f1effa; padding:.05em .22em; overflow-wrap:anywhere; }
-    pre { margin:0; padding:1.2em 1.4em; background:#f5f4fa; border-left:4px solid var(--lavender); color:#333747; white-space:pre-wrap; font-size:clamp(9px,.82vw,13px); line-height:1.52; overflow:hidden; }
+    pre { margin:0; padding:1em 1.2em; background:#f5f4fa; border-left:4px solid var(--lavender); color:#333747; white-space:pre-wrap; font-size:clamp(12px,1vw,17px); line-height:1.42; overflow:hidden; }
     .flow { display:flex; align-items:stretch; gap:1.2%; margin:1.5% 0; }
     .flow .box { flex:1; min-width:0; background:var(--soft); padding:1.1em; border-top:3px solid var(--lavender); }
     .flow .arrow { align-self:center; color:var(--lavender); font-size:clamp(16px,2vw,32px); }
-    .box strong { display:block; color:#3e4450; font-size:clamp(10px,.96vw,16px); margin-bottom:.45em; }
-    .box small { font-size:clamp(9px,.82vw,13px); line-height:1.36; display:block; }
+    .mermaid-diagram { display:flex; align-items:center; justify-content:center; flex:1; min-height:0; margin:.2em 0 .7em; }
+    .mermaid-diagram img { display:block; width:100%; max-height:100%; object-fit:contain; }
+    .box strong { display:block; color:#3e4450; font-size:clamp(13px,1.08vw,18px); margin-bottom:.4em; }
+    .box small { font-size:clamp(11px,.94vw,16px); line-height:1.3; display:block; }
     .trace { display:grid; grid-template-columns:15% 1fr; border-top:1px solid var(--line); margin-top:.4em; }
-    .trace dt,.trace dd { margin:0; padding:.48em .65em; border-bottom:1px solid var(--line); font-size:clamp(10px,.94vw,15px); line-height:1.33; }
+    .trace dt,.trace dd { margin:0; padding:.48em .65em; border-bottom:1px solid var(--line); font-size:clamp(12px,1.07vw,18px); line-height:1.32; }
     .trace dt { color:var(--purple); font:600 clamp(9px,.83vw,13px) "IBM Plex Mono",monospace; }
     .trace dd { border-left:1px solid var(--line); }
     table { width:100%; border-collapse:collapse; table-layout:fixed; }
     th { color:#42464f; font-weight:600; text-align:left; background:#f2f0fb; }
     td,th { padding:.52em .65em; border-bottom:1px solid var(--line); vertical-align:top; overflow-wrap:anywhere; }
     td code { background:transparent; padding:0; }
-    .note { background:#f5f3ff; border-left:4px solid var(--lavender); padding:.7em 1em; font-size:clamp(10px,.94vw,15px); line-height:1.38; }
+    .note { background:#f5f3ff; border-left:4px solid var(--lavender); padding:.65em .9em; font-size:clamp(12px,1.06vw,17px); line-height:1.32; }
     .note.magenta { background:#fff0f9; border-color:var(--magenta); }
     .foot { position:absolute; bottom:3%; left:7%; z-index:2; color:#fff; font:500 clamp(8px,.72vw,11px) "IBM Plex Mono",monospace; }
     .foot .source { margin-left:3em; opacity:.95; }
@@ -85,53 +87,45 @@
     <div class="brand">DEVCONF<small>.US</small></div>
     <div class="cover-main">
       <h1>Inside the vLLM<br>agentic tuning loop</h1>
-      <p>Control flow, benchmark semantics, isolated execution, and the recipe / merged PR knowledge paths</p>
+      <p>Current control flow after commits 50ac537 and c72716b: in-cluster GuideLLM, study controls, experiment lifecycle, and knowledge inputs</p>
     </div>
     <div class="foot">01 / 11 · implementation walkthrough</div>
   </section>
 
   <section class="slide">
-    <div class="kicker">Architecture · execution contexts</div>
-    <h2>One local control process, two vLLM targets</h2>
-    <p class="sub">The runner dispatches remote diagnostics and local HTTP benchmarks through separate paths.</p>
-    <div class="flow">
-      <div class="box"><strong>Claude API / Vertex</strong><small><code>messages.create</code><br>tool_use blocks + text</small></div>
-      <div class="arrow">⇄</div>
-      <div class="box"><strong>AgenticRunner</strong><small>message history<br>AgentState<br>decision_log</small></div>
-      <div class="arrow">→</div>
-      <div class="box"><strong>AgentTools</strong><small>dispatch + endpoint/model defaults<br>command_history</small></div>
-    </div>
-    <div class="cols two">
-      <div class="panel"><h3>Remote command path</h3><p><code>OcExecutor</code> invokes <code>oc exec … /bin/sh -c</code>. With no <code>pod_name</code>, diagnostics hit the baseline pod. A candidate <code>pod_name</code> creates a temporary executor for that pod.</p><p>SSH mode implements the same <code>RemoteExecutor</code> interface.</p></div>
-      <div class="panel"><h3>Local benchmark path</h3><p><code>run_benchmark</code> starts GuideLLM in the runner process. HTTP goes to the baseline port-forward by default or to the candidate endpoint returned by <code>create_vllm_pod</code>.</p><p><code>PodManager</code> exists only when OpenShift mode has a pod template.</p></div>
-    </div>
-    <div class="foot">02 / 11 <span class="source">agentic.py · tools.py · pod_manager.py</span></div><div class="footer-mark">DEV<br>CONF<br>.US</div>
+    <div class="kicker">Architecture · generated from Mermaid source</div>
+    <h2>Study setup → baseline → candidate loop</h2>
+    <div class="mermaid-diagram"><img src="agentic_tuning_flow.svg" alt="Mermaid flow diagram: profile provisioning creates a fresh baseline; a baseline GuideLLM Job feeds AgenticRunner; recipes and the PR index supply candidate ideas; the agent creates a candidate Pod, benchmarks, inspects logs, compares, deletes, then loops or reports; cleanup failure pauses the run."></div>
+    <div class="foot">02 / 11 <span class="source">Editable source: docs/agentic_tuning_flow.mmd</span></div><div class="footer-mark">DEV<br>CONF<br>.US</div>
   </section>
 
   <section class="slide rail">
     <div class="kicker">Run setup · profile mode</div>
-    <h2>A tuning profile materializes the environment before the loop starts</h2>
+    <h2>Each profile-driven study starts from a fresh baseline process</h2>
     <div class="flow">
-      <div class="box"><strong>YAML profile</strong><small>workload profiles<br>TP ceiling<br>model/runtime/environment</small></div>
+      <div class="box"><strong>YAML profile</strong><small>model + runtime<br>objective + TP ceiling<br>benchmark Job policy</small></div>
       <div class="arrow">→</div>
-      <div class="box"><strong>Provision</strong><small>namespace + secret reference<br>PVC + downloader Job<br>baseline Deployment + Service</small></div>
+      <div class="box"><strong>Provision</strong><small>model + results PVCs<br>reuse completed downloader<br>apply Deployment + Service</small></div>
       <div class="arrow">→</div>
-      <div class="box"><strong>Runner inputs</strong><small>baseline endpoint<br>rendered experiment YAML<br>model + constraints</small></div>
+      <div class="box"><strong>Study start</strong><small>restart existing baseline<br>wait for rollout<br>render candidate template</small></div>
     </div>
     <div class="cols two">
-      <div class="panel"><h3>Provisioning details</h3><p>A completed downloader Job is reused. The generated experiment Pod manifest is written to a local template file. Baseline service port-forwarding allocates an available local port.</p></div>
-      <div class="panel"><h3>Boundary of the invariant</h3><p>Profile provisioning may reconcile the baseline Deployment before tuning. Once <code>AgenticRunner.run()</code> begins, experiments use separate Pods; the runner's baseline path is for reads and benchmarks.</p></div>
+      <div class="panel"><h3>Provisioning sequence</h3><p>Copy model-access secret; apply model and results PVCs; run downloader only if incomplete. Apply baseline Deployment and Service. If the Deployment existed, issue <code>oc rollout restart</code>; then wait for rollout status.</p></div>
+      <div class="panel"><h3>Study inputs</h3><p>The profile supplies model, GPU resources, TP ceiling, base vLLM args, selected workload, and <code>optimization.objective</code> (<code>throughput</code> or <code>latency</code>). Candidate manifests derive from the same rendered container spec.</p></div>
     </div>
-    <div class="note">A profile's <code>max_tensor_parallel_size</code> is passed into the agent context. The example profile selects its benchmark workload; the system prompt still explicitly requests a <code>balanced</code> baseline and candidate run.</div>
+    <div class="note">The model-cache PVC persists across studies. The “do not restart baseline” rule applies inside the tuning loop, after this deterministic study setup.</div>
     <div class="railmark">DEV<br>CONF<br>.US</div><div class="foot">03 / 11</div>
   </section>
 
   <section class="slide">
     <div class="kicker">Runner internals · model response cycle</div>
-    <h2>An iteration counts a model call, not an experiment</h2>
+    <h2>The baseline Job completes before the first model iteration</h2>
     <div class="cols two">
       <div>
-        <pre>while not state.done and iteration &lt; max_iterations:
+        <pre>baseline = tools.dispatch("run_benchmark", policy)
+runner = AgenticRunner(baseline_summary=baseline.output)
+
+while not done and not paused and iteration &lt; cap:
     iteration += 1
     response = messages.create(
         system=SYSTEM_PROMPT,
@@ -144,98 +138,91 @@
         append_text_and_continue_prompt()</pre>
       </div>
       <div class="panel">
-        <h3>State and replay data</h3>
-        <p><code>AgentState</code> stores baseline/current benchmark text by profile, actions, kernel analysis, <code>done</code>, success, and summary.</p>
-        <p>Each dispatched tool records iteration, arguments, timestamp, and at most 4,000 output characters in <code>decision_log</code>. Up to 8,000 output characters return to the model.</p>
-        <p><code>run_benchmark</code> sets the runner's “benchmark called” flag even if the benchmark fails.</p>
+        <h3>State and context</h3>
+        <p>The controller checks <code>/v1/models</code> against the configured model, runs the baseline GuideLLM Job, and injects its metric rows into the first user message.</p>
+        <p><code>AgentState</code> now includes <code>paused</code>. A failed <code>delete_vllm_pod</code> stops the loop; <code>resume()</code> first verifies the Pod and Service are absent.</p>
+        <p>Each tool call records iteration, inputs, and up to 4,000 output characters in <code>decision_log</code>.</p>
       </div>
     </div>
-    <div class="note">At the fourth model iteration without a benchmark call, the runner injects a benchmark reminder. With five iterations left, it injects a request to call <code>done</code>.</div>
+    <div class="note">An iteration remains one model response, not one experiment. The pre-run baseline sets the benchmark-called flag. Current code still injects a <code>done</code> warning with five iterations remaining.</div>
     <div class="foot">04 / 11 <span class="source">AgenticRunner.run · _handle_tool_calls · _execute_tool</span></div><div class="footer-mark">DEV<br>CONF<br>.US</div>
   </section>
 
   <section class="slide">
     <div class="kicker">Tool routing · argument semantics</div>
-    <h2>The same tool namespace crosses three address spaces</h2>
+    <h2>Tool dispatch maps endpoints to cluster Services</h2>
     <table>
       <thead><tr><th style="width:27%">Tool calls</th><th style="width:27%">Execution site</th><th>Addressing rule / data returned</th></tr></thead>
       <tbody>
-        <tr><td><code>run_command</code>, <code>read_file</code>, <code>fetch_vllm_logs</code></td><td>Remote, via <code>OcExecutor</code> or SSH</td><td>Omit <code>pod_name</code> for baseline; pass candidate pod name to target experiment.</td></tr>
-        <tr><td><code>run_benchmark</code></td><td>Local GuideLLM subprocess</td><td>Endpoint defaults to baseline; explicit endpoint selects candidate. Model is filled from CLI context.</td></tr>
-        <tr><td><code>read_benchmark_results</code>, <code>compare_benchmarks</code></td><td>Local JSON files</td><td>Paths from prior benchmark tool outputs; comparison uses baseline and candidate JSON.</td></tr>
-        <tr><td><code>create_vllm_pod</code>, <code>delete_vllm_pod</code></td><td>Local <code>PodManager</code> → <code>oc</code></td><td>Create returns pod name and localhost endpoint; delete stops forwarding and removes pod.</td></tr>
-        <tr><td><code>search_vllm_prs</code></td><td>Local SQLite index</td><td>Text query with optional architecture/hardware facets; no GitHub call at search time.</td></tr>
+        <tr><td><code>run_command</code></td><td>Disposable in-cluster curl Pod</td><td>HTTP diagnostics or cache inspection; profile mode mounts the model-cache PVC read-only at <code>/models</code>.</td></tr>
+        <tr><td><code>fetch_vllm_logs</code></td><td><code>OcExecutor</code> / SSH</td><td>Omit <code>pod_name</code> for baseline; pass candidate name for experiment logs.</td></tr>
+        <tr><td><code>run_benchmark</code></td><td>In-cluster GuideLLM Job</td><td>Default target is baseline Service. Candidate endpoint must match an active Pod; it maps to that Pod's Service.</td></tr>
+        <tr><td><code>create_vllm_pod</code>, <code>delete_vllm_pod</code></td><td><code>PodManager</code> → <code>oc</code></td><td>Create/delete both Pod and private Service. The returned endpoint is <code>http://&lt;pod-name&gt;:8000</code>.</td></tr>
+        <tr><td><code>search_vllm_prs</code></td><td>Local SQLite FTS5</td><td>Query merged PR metadata using optional architecture and hardware facets.</td></tr>
       </tbody>
     </table>
-    <div class="note">The dispatcher removes <code>pod_name</code> from the tool input before invoking pod-aware handlers, then constructs the candidate executor. Tool inputs are otherwise passed to the handler.</div>
+    <div class="note">The active Job path returns metric rows from <code>oc logs job/…</code>. JSON and CSV are written to the cluster results PVC; controller-local JSON comparison tools are not part of this path.</div>
     <div class="foot">05 / 11 <span class="source">AgentTools.dispatch · dispatch_tool</span></div><div class="footer-mark">DEV<br>CONF<br>.US</div>
   </section>
 
   <section class="slide rail">
     <div class="kicker">Measurement · baseline</div>
-    <h2>Baseline JSON is the stable comparison input for candidate runs</h2>
+    <h2>The controller measures baseline before starting Claude</h2>
     <dl class="trace">
-      <dt>0 · Context</dt><dd>Prompt requests recipe lookup, then <code>nvidia-smi</code> and <code>cat /proc/1/cmdline | tr '\0' ' '</code>.</dd>
-      <dt>1 · Bench</dt><dd><code>run_benchmark(profile="balanced")</code> targets the default baseline endpoint. GuideLLM writes <code>./benchmark_results/balanced_&lt;timestamp&gt;.json</code>.</dd>
-      <dt>2 · Logs</dt><dd><code>fetch_vllm_logs()</code> parses model/engine config, KV cache and model memory, compilation, attention backend, warnings, and errors.</dd>
-      <dt>3 · Parse</dt><dd><code>read_benchmark_results(results_path)</code> emits a summary and flat metrics per concurrency level.</dd>
-      <dt>4 · Retain</dt><dd>The runner stores the first successful baseline benchmark text for each profile. The agent retains the JSON path for subsequent comparisons.</dd>
+      <dt>0 · Verify</dt><dd><code>ClusterCurlExecutor</code> calls baseline <code>/v1/models</code>. The served ID must equal the configured benchmark model.</dd>
+      <dt>1 · Job</dt><dd><code>run_benchmark(profile=args.profiles[0])</code> starts GuideLLM against the baseline Service using profile benchmark concurrency and duration.</dd>
+      <dt>2 · Result</dt><dd>Job writes JSON/CSV to the results PVC. <code>ClusterBenchmarkRunner._summarize</code> extracts completed-request, latency, and throughput rows from Job logs.</dd>
+      <dt>3 · Context</dt><dd>The summary is passed as <code>baseline_summary</code> and inserted into the agent's first message. The agent is instructed not to rerun baseline.</dd>
     </dl>
-    <div class="note magenta">After every benchmark, the system prompt requires both log fetch and JSON parsing. This sequencing is prompt guided; the runner does not enforce those two calls as a state machine.</div>
+    <div class="note magenta">The benchmark handler rejects agent-supplied concurrency or duration that differs from the study policy. It does not currently enforce a fixed profile name.</div>
     <div class="railmark">DEV<br>CONF<br>.US</div><div class="foot">06 / 11</div>
   </section>
 
   <section class="slide">
     <div class="kicker">Experiment · resource lifecycle</div>
-    <h2>Each candidate is a copied Pod manifest plus a temporary endpoint</h2>
+    <h2>Each candidate gets a Pod and an exact-match private Service</h2>
     <div class="flow">
-      <div class="box"><strong>Render</strong><small>deep-copy template<br>name = vllm-tune-&lt;epoch&gt;<br>label experiment=true<br>append <code>vllm_args</code></small></div>
+      <div class="box"><strong>Render</strong><small>copy Pod template<br>append <code>vllm_args</code><br>reject prefix-cache flags</small></div>
       <div class="arrow">→</div>
-      <div class="box"><strong>Start</strong><small><code>oc apply -f</code><br>poll phase + Ready<br>120 s timeout<br>5 s interval</small></div>
+      <div class="box"><strong>Apply</strong><small>new Pod + Service<br>selector: unique experiment ID</small></div>
       <div class="arrow">→</div>
-      <div class="box"><strong>Expose</strong><small>local port starts at 8001<br><code>oc port-forward</code><br>pod :8000</small></div>
+      <div class="box"><strong>Ready</strong><small>poll phase + Ready<br>900 s timeout<br>5 s interval</small></div>
       <div class="arrow">→</div>
-      <div class="box"><strong>Evaluate</strong><small>GuideLLM → candidate<br>logs → candidate<br>compare → local JSON</small></div>
+      <div class="box"><strong>Evaluate</strong><small>Job → private Service<br>logs → candidate Pod<br>compare matching rows</small></div>
       <div class="arrow">→</div>
-      <div class="box"><strong>Delete</strong><small>SIGTERM forwarder<br>SIGKILL fallback<br><code>oc delete --force</code></small></div>
+      <div class="box"><strong>Delete</strong><small>force-delete Pod<br>delete Service<br>pause if either fails</small></div>
     </div>
     <div class="cols two">
-      <div class="panel"><h3>Returned handle</h3><p><code>create_vllm_pod</code> returns <code>pod_name</code> and <code>http://localhost:&lt;port&gt;</code>. <code>active_pods</code> stores the process handle, port, args, and endpoint for cleanup.</p></div>
-      <div class="panel"><h3>Failure and cleanup paths</h3><p>Failed/Unknown Pod phases raise with events; readiness timeout raises with last phase. The runner calls <code>cleanup_all()</code> in <code>finally</code>; an <code>atexit</code> hook also exists.</p></div>
+      <div class="panel"><h3>Candidate address</h3><p><code>create_vllm_pod</code> returns <code>pod_name</code> and <code>http://&lt;pod-name&gt;:8000</code>. <code>active_pods</code> tracks args and endpoint; <code>get_cluster_target</code> verifies ownership before a Job is launched.</p></div>
+      <div class="panel"><h3>Failure paths</h3><p>Startup failures collect Pod JSON, events, and tail logs, then remove untracked resources. A failed delete retains the active record and pauses tuning; resume requires human cleanup and a Pod/Service absence check.</p></div>
     </div>
     <div class="foot">07 / 11 <span class="source">PodManager._build_pod_manifest · create_pod · delete_pod</span></div><div class="footer-mark">DEV<br>CONF<br>.US</div>
   </section>
 
   <section class="slide">
     <div class="kicker">Benchmark · invocation and shape</div>
-    <h2>GuideLLM runs locally with a profile and concurrency sweep</h2>
+    <h2>The scored test is an OpenShift Job at configured load</h2>
     <div class="cols two">
       <div>
-        <pre>python -m guidellm benchmark run
-  --target=http://localhost:8001/v1
-  --model=&lt;served model&gt;
-  --processor=&lt;HF model id&gt;
-  --rate-type=concurrent
-  --rate=1,50
-  --max-seconds=30
-  --request-type=chat_completions
-  --data='{"prompt_tokens":128,
-           "output_tokens":128,
-           "samples":100}'</pre>
-        <p style="margin-top:1em">Request type is inferred from model name unless explicitly overridden. <code>/models/</code> is stripped when deriving the processor ID.</p>
+        <pre>guidellm run
+  --backend kind=openai_http,
+            target=http://&lt;service&gt;:8000,
+            model=&lt;served-id&gt;
+  --tokenizer kind=huggingface_auto,
+              model=&lt;served-id&gt;
+  --data kind=synthetic_text,
+         prompt_tokens=16384,
+         output_tokens=1024
+  --profile '{"kind":"concurrent",
+              "streams":[1,50]}'
+  --constraint kind=max_duration,seconds=30
+  --output kind=json,path=/results/&lt;job&gt;.json
+  --output kind=csv,path=/results/&lt;job&gt;.csv</pre>
       </div>
       <div>
-        <table class="tight">
-          <thead><tr><th style="width:45%">Profile</th><th>ISL</th><th>OSL</th><th>Samples</th></tr></thead>
-          <tbody>
-            <tr><td>balanced</td><td>128</td><td>128</td><td>100</td></tr>
-            <tr><td>decode_heavy</td><td>128</td><td>512</td><td>100</td></tr>
-            <tr><td>prefill_heavy</td><td>512</td><td>64</td><td>100</td></tr>
-            <tr><td>long_context</td><td>1024</td><td>128</td><td>100</td></tr>
-            <tr><td>long_context_32k_1k</td><td>32768</td><td>1024</td><td>10</td></tr>
-          </tbody>
-        </table>
-        <p>Default concurrency levels are <code>1,50</code>; a call may override them. JSON contains a <code>benchmarks[]</code> record per load point.</p>
+        <div class="panel"><h3>Study benchmark policy</h3><p>The example profile selects <code>long_context_16k_1k</code>, concurrency <code>[1,50]</code>, and 30 seconds. The Job reads ISL/OSL from the chosen workload profile and concurrency/duration from <code>environment.benchmark</code>.</p></div>
+        <div class="panel"><h3>Job execution</h3><p><code>backoffLimit=0</code>; completion TTL 24 hours. A non-root container has a read-only root filesystem, ephemeral <code>/tmp</code>, and results PVC mounted at <code>/results</code>.</p></div>
+        <div class="panel"><h3>Return path</h3><p><code>oc wait</code> → <code>oc logs</code> → parse concurrent rows from Job text. Failed completion returns Job logs as the error; the JSON path is not passed to the agent.</p></div>
       </div>
     </div>
     <div class="foot">08 / 11 <span class="source">settings.yaml · tools._handle_run_benchmark</span></div><div class="footer-mark">DEV<br>CONF<br>.US</div>
@@ -243,57 +230,52 @@
 
   <section class="slide rail">
     <div class="kicker">Comparison · concrete semantics</div>
-    <h2>Comparison operates on shared concurrency records and numeric fields</h2>
+    <h2>Current comparison uses Job console rows, not local JSON</h2>
     <div class="cols two">
-      <div class="panel"><h3>Flatten GuideLLM JSON</h3><p><code>_extract_flat_metrics</code> reads <code>benchmarks[].config.strategy.max_concurrency</code> (or worker count), request totals, throughput, TTFT, ITL, TPOT, request latency, and request rate. It extracts mean, median, P50, P95, P99 where present.</p><p>Baseline and current records are aligned by common concurrency. With no common point, the comparator falls back to the first record from each file.</p></div>
-      <div class="panel"><h3>2% threshold per metric</h3><pre>percent_change = 100 × (current - baseline)
-                 / baseline
-
-throughput: +&gt;2% improvement
-latency:    -&gt;2% improvement
-within ±2%: neutral</pre><p><code>detect_regression</code> returns per-metric regressions, improvements, neutral results, and a per-concurrency verdict.</p></div>
+      <div class="panel"><h3>What the agent receives</h3><p><code>_summarize</code> extracts rows from “Run Summary Info,” “Request Latency Statistics,” and “Server Throughput Statistics.” The initial message contains baseline rows; every experiment returns candidate rows.</p><p>Rows at concurrency 1 must be compared with concurrency 1, and 50 with 50. The system prompt requires this matching and a 2% improvement threshold.</p></div>
+      <div class="panel"><h3>What code enforces</h3><p><code>_handle_run_benchmark</code> rejects differing concurrency and duration. <code>AgentTools.dispatch</code> rejects endpoints outside <code>active_pods</code>.</p><p>The 2% decision and “10 consecutive non-improving experiments” remain agent judgments. <code>compare_benchmarks</code> and <code>detect_regression</code> still exist for local JSON, but the in-cluster Job path does not call them.</p></div>
     </div>
-    <div class="note magenta">Current code compares every common numeric field, including request counts and duration. Unknown field names default to “higher is better.” The deck does not treat the verdict as a validated service-level objective or statistical significance test.</div>
+    <div class="note magenta">The current Job path does not aggregate repeated trials or run a statistical test. Each call creates one scored GuideLLM Job; any “3× reproducibility” claim would need an implemented repeat-and-aggregate loop.</div>
     <div class="railmark">DEV<br>CONF<br>.US</div><div class="foot">09 / 11</div>
   </section>
 
   <section class="slide">
-    <div class="kicker">Enhancements · knowledge retrieval</div>
-    <h2>Recipes and merged PRs supply candidate hypotheses</h2>
+    <div class="kicker">Knowledge inputs · implemented paths</div>
+    <h2>Recipe retrieval, PR search, and objective-guided selection</h2>
     <div class="cols two">
       <div class="panel">
-        <h3>vLLM Recipes: model configuration path</h3>
-        <p>Prompt sequence: fetch <code>recipes.vllm.ai/models.json</code>, match the served HF ID, then fetch model JSON. It reads <code>model.base_args</code>, variants and quantization args, hardware overrides, features, and opt-in features.</p>
-        <p>If there is no exact match, the prompt directs a family/architecture YAML search in <code>vllm-project/recipes</code>. Network failure falls back to local practices.</p>
-        <span class="chip">remote curl</span><span class="chip">prompt guided</span>
+        <h3>Active recipe path</h3>
+        <p>The system prompt asks the agent to fetch <code>models.json</code> and a matched recipe via <code>run_command</code>, now executed in a disposable cluster curl Pod. It can fall back to family/architecture YAML in the recipes repository.</p>
+        <p><code>optimization.objective</code> changes candidate priority: throughput emphasizes compatible MTP/speculative decoding and batching; latency emphasizes TTFT, ITL, scheduling, and prefill.</p>
+        <span class="chip">cluster curl Pod</span><span class="chip">agent decision</span>
       </div>
       <div class="panel">
-        <h3>Merged PR index: local change history</h3>
-        <p><code>pr-index sync</code> builds SQLite FTS5 from merged PR title, body, labels, and optionally changed-file names. Derived facets cover hardware, architecture, and tuning domains.</p>
-        <p><code>search_vllm_prs(query, architecture, hardware)</code> searches the local DB. Its manifest records repository, schema version, document count, and generation time; the checked-in manifest currently lists <strong>4,266</strong> documents.</p>
-        <span class="chip">SQLite FTS5</span><span class="chip">offline query</span><span class="chip">Git LFS artifact</span>
+        <h3>PR index and new prefetch module</h3>
+        <p><code>search_vllm_prs(query, architecture, hardware)</code> searches the local SQLite FTS5 database. The manifest records source, schema, generation time, and <strong>4,266</strong> merged PR documents.</p>
+        <p><code>recipe_fetcher.py</code> adds exact/normalized/token-overlap matching and extracts base args, hardware overrides, variants, and speculative decoding. In this checkout, it has no caller in the startup path.</p>
+        <span class="chip">PR search active</span><span class="chip">prefetch helper staged</span>
       </div>
     </div>
-    <div class="note">Both sources inform argument selection. Their suggestions enter the same Pod → GuideLLM → JSON comparison path as any other candidate.</div>
+    <div class="note">Knowledge sources propose arguments; a candidate still runs through Pod → GuideLLM Job → matching-row comparison. The new prefetch helper is present in the repository but is not injected into the agent's first message by current code.</div>
     <div class="foot">10 / 11 <span class="source">SYSTEM_PROMPT · vllm_pr_index.py · data/vllm-pr-index.manifest.json</span></div><div class="footer-mark">DEV<br>CONF<br>.US</div>
   </section>
 
   <section class="slide">
-    <div class="kicker">Termination · report artifacts</div>
-    <h2>The hard boundary is model-call count; final output is Markdown + JSON</h2>
+    <div class="kicker">Observability · controls · termination</div>
+    <h2>MLflow records Jobs; cleanup failure pauses the runner</h2>
     <div class="cols two">
       <div class="panel">
-        <h3>Stopping logic</h3>
-        <p><code>done</code> sets <code>AgentState.done</code>, <code>success</code>, and summary. The prompt asks for 10 consecutive experiments without a &gt;2% improvement before calling it; the runner does not maintain that counter.</p>
-        <p><code>max_iterations</code> is enforced in the loop. If reached without <code>done</code>, the runner constructs a fallback summary from benchmark and comparison entries in <code>decision_log</code>.</p>
+        <h3>Active runtime behavior</h3>
+        <p>With <code>--mlflow-uri</code>, each completed Job logs model/target/concurrency tags, ISL/OSL params, throughput and TTFT/ITL percentiles, plus <code>guidellm.log</code>. MLflow failure is caught and does not invalidate the benchmark.</p>
+        <p><code>max_iterations</code> caps model calls. Cleanup failure sets <code>paused</code>; <code>resume()</code> verifies the Pod and Service are gone before continuing with preserved conversation state.</p>
       </div>
       <div class="panel">
-        <h3>Persisted results</h3>
-        <p><code>Reporter.generate</code> writes <code>agent_reports/report_&lt;timestamp&gt;.md</code> and <code>.json</code>. The report includes baseline/final metrics, actions, bottlenecks, optional kernel analysis, token usage, and decision log.</p>
-        <p>The CLI parses retained benchmark text into report snapshots. Candidate Pods are cleaned up in <code>finally</code> before report generation.</p>
+        <h3>Committed, but not wired into this run path</h3>
+        <p><code>BenchmarkSpec</code> and <code>WarmupSpec</code> define a locked scored workload and unscored warmup (default concurrency 8 for 15 seconds). No current caller builds a spec or launches a warmup Job.</p>
+        <p><code>Reporter.generate</code> writes Markdown and JSON. The controller's pre-run baseline summary is not stored in <code>AgentState.baseline_results</code>; structured report metrics from Job rows may therefore be incomplete.</p>
       </div>
     </div>
-    <div class="note magenta">The current runner depends on the agent to follow benchmark/log/cleanup ordering and to select the best configuration. These are prompt rules, not enforced transitions in the Python loop.</div>
+    <div class="note magenta">The 10 non-improving-experiment rule is prompt guidance. The current code still sends a “call done” warning five model calls before the hard cap; it does not implement three scored repetitions per candidate.</div>
     <div class="foot">11 / 11 <span class="source">AgenticRunner.run · main.run_agent · Reporter.generate</span></div><div class="footer-mark">DEV<br>CONF<br>.US</div>
   </section>
 </main>
