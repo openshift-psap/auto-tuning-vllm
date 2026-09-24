@@ -1,7 +1,8 @@
 # Agentic vLLM Tuner
 
 Claude-driven alternative to Optuna search. The agent keeps a **read-only baseline**
-server, creates a **fresh pod per experiment**, benchmarks with GuideLLM, compares
+server, creates a **fresh pod per experiment**, benchmarks with an in-cluster
+GuideLLM Job, compares
 metrics with a 2% regression threshold, then deletes the experiment pod.
 
 This is complementary to `auto-tune-vllm optimize`: Optuna does Bayesian search over
@@ -23,7 +24,7 @@ model downloader, baseline service, and experiment template.
 The tuning profile is the source of truth for the model, model cache, GPU
 resources, TP ceiling, vLLM runtime flags, and benchmark workload. By default,
 the agent provisions missing cache/download/baseline resources first, reuses a
-healthy baseline without restarting it, creates a local baseline port-forward,
+freshly restarts the baseline Deployment for each study, creates a local baseline port-forward,
 and passes the rendered experiment template to the agent.
 
 ```bash
@@ -78,14 +79,16 @@ auto-tune-vllm agent --vertex --vllm-endpoint http://localhost:8000 --model <mod
 3. **Stop** — 10 consecutive experiments with no >2% gain, or `--max-iterations`.
 4. **Report** — markdown + JSON under `agent_reports/`.
 
-The baseline pod is never killed or restarted. Experiment pods are cleaned up on exit (`atexit`).
+The baseline Deployment is restarted at the beginning of every study so each
+baseline benchmark starts from a fresh server process. Its model-cache PVC is
+preserved. Experiment pods are cleaned up on exit (`atexit`).
 
 ## Tools
 
 | Tool | Where it runs |
 |------|----------------|
 | `run_command` / `read_file` / `write_file` / `fetch_vllm_logs` | Remote (pod or SSH host) |
-| `run_benchmark` / `read_benchmark_results` / `compare_benchmarks` | Local (hits the port-forward) |
+| `run_benchmark` | In-cluster OpenShift GuideLLM Job (targets a private Service) |
 | `create_vllm_pod` / `delete_vllm_pod` | OpenShift (`oc apply` / `oc delete`) |
 | `analyze_trace` / `map_kernel` / `check_preemptions` | Local analysis |
 

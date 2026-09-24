@@ -16,6 +16,7 @@ class TuningProfile:
     name: str
     benchmark_profiles: list[str]
     max_tensor_parallel_size: int | None = None
+    optimization_objective: str = "throughput"
     environment: dict[str, Any] | None = None
     runtime: dict[str, Any] | None = None
 
@@ -40,6 +41,11 @@ def load_tuning_profile(path: str | Path) -> TuningProfile:
             "constraints.max_tensor_parallel_size must be a positive integer"
         )
 
+    optimization = data.get("optimization") or {}
+    objective = str(optimization.get("objective", "throughput")).lower()
+    if objective not in {"throughput", "latency"}:
+        raise ValueError("optimization.objective must be 'throughput' or 'latency'")
+
     environment = data.get("environment") or None
     if environment is not None and not isinstance(environment, dict):
         raise ValueError("environment must be a mapping")
@@ -51,6 +57,7 @@ def load_tuning_profile(path: str | Path) -> TuningProfile:
         name=str(data.get("name") or profile_path.stem),
         benchmark_profiles=benchmark_profiles,
         max_tensor_parallel_size=max_tp,
+        optimization_objective=objective,
         environment=environment,
         runtime=runtime,
     )

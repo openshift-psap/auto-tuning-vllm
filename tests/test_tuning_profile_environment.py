@@ -48,7 +48,7 @@ def _profile() -> TuningProfile:
                 },
             },
         },
-        runtime={"max_model_len": 32768, "base_vllm_args": ["--enable-prefix-caching"]},
+        runtime={"max_model_len": 32768, "base_vllm_args": []},
     )
 
 
@@ -59,11 +59,13 @@ def test_rendered_environment_keeps_profile_constraints_out_of_manifests():
 
     assert results_pvc["metadata"]["name"] == "guidellm-results"
     assert job["metadata"]["name"] == "download-model"
+    assert deployment["spec"]["strategy"]["type"] == "Recreate"
     assert deployment["spec"]["selector"]["matchLabels"] == service["spec"]["selector"]
     container = deployment["spec"]["template"]["spec"]["containers"][0]
     assert "--tensor-parallel-size=4" in container["args"]
     assert "--max-model-len=32768" in container["args"]
     assert experiment["spec"]["containers"][0]["args"] == container["args"]
+    assert container["volumeMounts"][0].get("readOnly") is None
 
 
 def test_job_complete_recognizes_completed_download(monkeypatch):

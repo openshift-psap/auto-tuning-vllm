@@ -119,16 +119,22 @@ def agent_command(
         "--mlflow-experiment",
         help="MLflow experiment name (default: vllm-autotuning)",
     ),
+    mlflow_workspace: Optional[str] = typer.Option(
+        None,
+        "--mlflow-workspace",
+        help="MLflow workspace name (default: $MLFLOW_WORKSPACE)",
+    ),
 ):
     """Run the Claude-driven pod-per-experiment vLLM tuner.
 
-    The baseline pod/server is never restarted. Each experiment creates a
-    fresh pod (when --pod-template is set), benchmarks it with GuideLLM,
-    compares against baseline, then deletes it.
+    Each study provisions a freshly restarted baseline server. Each experiment
+    then creates a fresh pod (when --pod-template is set), benchmarks it with
+    GuideLLM, compares against that baseline, then deletes it.
     """
     port_forward = None
     benchmark_config = None
     benchmark_target = None
+    optimization_objective = "throughput"
     if tuning_profile:
         from ..agent.tuning_profile import load_tuning_profile
 
@@ -137,6 +143,7 @@ def agent_command(
             profiles = profile.benchmark_profiles
         if max_tensor_parallel_size is None:
             max_tensor_parallel_size = profile.max_tensor_parallel_size
+        optimization_objective = profile.optimization_objective
         environment = profile.environment
         if environment is not None:
             model_config = environment.get("model")
@@ -151,7 +158,6 @@ def agent_command(
                 )
             from ..agent.provision import (
                 provision_environment,
-                start_baseline_port_forward,
             )
 
             if environment is None:
@@ -185,14 +191,9 @@ def agent_command(
             oc_pod = f"deployment/{provisioned.baseline_deployment}"
             pod_template = str(provisioned.experiment_template)
             if vllm_endpoint is None:
-                port_forward = start_baseline_port_forward(
-                    kubeconfig=kubeconfig,
-                    namespace=provisioned.namespace,
-                    service=provisioned.baseline_deployment,
-                )
-                vllm_endpoint = port_forward.endpoint
+                vllm_endpoint = benchmark_target
                 console.print(
-                    f"[cyan]Baseline available locally at {vllm_endpoint}[/cyan]"
+                    f"[cyan]Baseline available in-cluster at {vllm_endpoint}[/cyan]"
                 )
 
     if vllm_endpoint is None:
@@ -248,6 +249,7 @@ def agent_command(
         pod_template=pod_template,
         benchmark_config=benchmark_config,
         benchmark_target=benchmark_target,
+        optimization_objective=optimization_objective,
         vertex=(
             vertex
             if vertex is not None
@@ -258,6 +260,7 @@ def agent_command(
         vertex_region=vertex_region or os.environ.get("CLOUD_ML_REGION", "us-east5"),
         mlflow_uri=mlflow_uri or os.environ.get("MLFLOW_TRACKING_URI"),
         mlflow_experiment=mlflow_experiment,
+        mlflow_workspace=mlflow_workspace or os.environ.get("MLFLOW_WORKSPACE"),
     )
     try:
         run_agent(args)

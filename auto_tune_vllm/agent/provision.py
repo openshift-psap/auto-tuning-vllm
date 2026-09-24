@@ -48,7 +48,7 @@ def provision_environment(
     experiment_template: str | Path,
     timeout: str = "20m",
 ) -> ProvisionedEnvironment:
-    """Provision a model cache, baseline server, and experiment pod template.
+    """Provision cache and a freshly restarted baseline for every study.
 
     The profile's model-access secret is copied by reference from its declared
     source namespace without writing its data to disk or command output.
@@ -97,23 +97,36 @@ def provision_environment(
                 f"--timeout={timeout}",
             ],
         )
+
     deployment_name = _required_string(baseline, "name")
-    if not _deployment_available(kubeconfig, namespace, deployment_name):
-        _apply_resource(kubeconfig, namespace, deployment)
-        _apply_resource(kubeconfig, namespace, service)
+    deployment_exists = _resource_exists(
+        kubeconfig, namespace, "deployment", deployment_name
+    )
+    _apply_resource(kubeconfig, namespace, deployment)
+    _apply_resource(kubeconfig, namespace, service)
+    if deployment_exists:
+        # Keep the cached model, but give every study a fresh server process.
         _oc(
             kubeconfig,
             [
                 "rollout",
-                "status",
+                "restart",
                 "-n",
                 namespace,
                 f"deployment/{deployment_name}",
-                f"--timeout={timeout}",
             ],
         )
-    elif not _resource_exists(kubeconfig, namespace, "service", deployment_name):
-        _apply_resource(kubeconfig, namespace, service)
+    _oc(
+        kubeconfig,
+        [
+            "rollout",
+            "status",
+            "-n",
+            namespace,
+            f"deployment/{deployment_name}",
+            f"--timeout={timeout}",
+        ],
+    )
 
     template_path = Path(experiment_template)
     template_path.parent.mkdir(parents=True, exist_ok=True)
@@ -195,19 +208,6 @@ def _job_complete(kubeconfig: str, namespace: str, job_name: str) -> bool:
         return False
     status = json.loads(result.stdout).get("status", {})
     return status.get("succeeded", 0) >= 1
-
-
-def _deployment_available(kubeconfig: str, namespace: str, deployment_name: str) -> bool:
-    result = _oc(
-        kubeconfig,
-        ["get", "deployment", deployment_name, "-n", namespace, "-o", "json"],
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        return False
-    status = json.loads(result.stdout).get("status", {})
-    return status.get("availableReplicas", 0) >= 1
 
 
 def _resource_exists(

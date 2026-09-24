@@ -1,5 +1,8 @@
 name: janus-gemma-16k1k
 
+optimization:
+  objective: throughput
+
 # The source of truth for this complete agentic-tuning environment.
 environment:
   namespace: agentic-tuning-32k1k
@@ -38,7 +41,7 @@ environment:
       limits:
         cpu: "4"
         memory: 8Gi
-    concurrency: [1]
+    concurrency: [1, 50]
     max_seconds: 30
 
 workload:
@@ -51,5 +54,4 @@ constraints:
 runtime:
   max_model_len: 32768
   base_vllm_args:
-    - --enable-prefix-caching
     - --gpu-memory-utilization=0.90

@@ -22,7 +22,7 @@ flowchart TD
 
     subgraph Baseline["Baseline: never restarted or modified"]
       Remote["SSHExecutor or OcExecutor"] --> BasePod["Baseline vLLM pod"]
-      BenchBase["GuideLLM benchmark<br/>(local; baseline endpoint)"] --> BasePod
+      BenchBase["GuideLLM Job<br/>(in-cluster; baseline Service)"] --> BasePod
       BasePod --> LogsBase["fetch_vllm_logs<br/>parse config, memory, warnings"]
       BenchBase --> ResultsBase["read_benchmark_results<br/>throughput, TTFT, ITL, TPOT"]
     end
@@ -37,7 +37,7 @@ flowchart TD
       PodMgr --> Manifest["Copy YAML template;<br/>append vLLM args"]
       Manifest --> ExpPod["New OpenShift vLLM pod"]
       ExpPod --> PF["oc port-forward<br/>unique localhost port"]
-      PF --> BenchExp["GuideLLM benchmark<br/>(local; experiment endpoint)"]
+      PF --> BenchExp["GuideLLM Job<br/>(in-cluster; experiment Service)"]
       ExpPod --> LogsExp["fetch_vllm_logs"]
       BenchExp --> ResultsExp["read_benchmark_results"]
       ResultsBase --> Compare["compare_benchmarks<br/>baseline vs experiment"]

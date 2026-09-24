@@ -45,6 +45,7 @@ import os
 import shlex
 import subprocess
 import sys
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -246,6 +247,38 @@ class OcExecutor(RemoteExecutor):
         return result.success and "ok" in result.stdout
 
 
+class ClusterCurlExecutor(RemoteExecutor):
+    """Run an HTTP diagnostic command in a disposable in-cluster curl pod."""
+
+    def __init__(self, namespace: str, kubeconfig: Optional[str] = None):
+        self.namespace = namespace
+        self.kubeconfig = kubeconfig
+
+    def run(self, command: str, timeout: int = 60) -> CommandResult:
+        cmd = ["oc"]
+        if self.kubeconfig:
+            cmd += ["--kubeconfig", self.kubeconfig]
+        cmd += [
+            "-n", self.namespace, "run", f"agent-curl-{int(time.time() * 1000)}",
+            "--image=curlimages/curl:8.10.1", "--restart=Never", "--rm", "-i",
+            "--attach", "--command", "--", "/bin/sh", "-c", command,
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 30)
+            return CommandResult(result.stdout, result.stderr, result.returncode, result.returncode == 0)
+        except subprocess.TimeoutExpired:
+            return CommandResult("", f"in-cluster curl pod timed out after {timeout}s", -1, False)
+
+    def read_file(self, path: str) -> CommandResult:
+        return CommandResult("", "File reads are unavailable in curl pods.", -1, False)
+
+    def write_file(self, path: str, content: str) -> CommandResult:
+        return CommandResult("", "File writes are unavailable in curl pods.", -1, False)
+
+    def test_connection(self) -> bool:
+        return True
+
+
 # ---------------------------------------------------------------------------
 # Benchmark profiles (loaded from settings.yaml)
 # ---------------------------------------------------------------------------
@@ -369,13 +402,14 @@ TOOL_DEFINITIONS: list[dict] = [
     {
         "name": "run_benchmark",
         "description": (
-            "Run a GuideLLM benchmark as an in-cluster OpenShift Job. "
+            "Run a GuideLLM benchmark only as an in-cluster OpenShift Job. "
             "This measures throughput (tokens/sec), TTFT, ITL, and TPOT at P50/P95/P99. "
             "Choose a profile to set ISL/OSL and concurrency for the load pattern. "
             "Default profiles: balanced (ISL=128,OSL=128), decode_heavy (ISL=128,OSL=512), "
             "prefill_heavy (ISL=512,OSL=64), long_context (ISL=1024,OSL=128). "
             "The benchmark takes 2-10 minutes depending on max-seconds. "
-            "A completed-job metric summary is returned directly."
+            "No controller-local GuideLLM execution is supported; a completed-job "
+            "metric summary is returned directly."
         ),
         "input_schema": {
             "type": "object",
@@ -877,10 +911,46 @@ def _handle_run_benchmark(
     profile_name = args["profile"]
     endpoint = args["endpoint"]
     model = args["model"]
-    max_seconds = args.get("max_seconds", 30)
-    concurrency = args.get(
-        "concurrency", ",".join(str(c) for c in DEFAULT_CONCURRENCY_LEVELS)
-    )
+    if benchmark_runner is not None:
+        configured_concurrency = ",".join(
+            str(value) for value in benchmark_runner.config.get("concurrency", [1])
+        )
+        configured_max_seconds = benchmark_runner.config.get("max_seconds", 30)
+        requested_concurrency = args.get("concurrency")
+        requested_max_seconds = args.get("max_seconds")
+        if (
+            requested_concurrency is not None
+            and requested_concurrency != configured_concurrency
+        ):
+            return ToolResult(
+                tool="run_benchmark",
+                success=False,
+                output="",
+                error=(
+                    "Concurrency is fixed by the study benchmark policy: "
+                    f"{configured_concurrency}. Do not compare different loads."
+                ),
+            )
+        if (
+            requested_max_seconds is not None
+            and requested_max_seconds != configured_max_seconds
+        ):
+            return ToolResult(
+                tool="run_benchmark",
+                success=False,
+                output="",
+                error=(
+                    "Benchmark duration is fixed by the study benchmark policy: "
+                    f"{configured_max_seconds}s."
+                ),
+            )
+        concurrency = configured_concurrency
+        max_seconds = configured_max_seconds
+    else:
+        max_seconds = args.get("max_seconds", 30)
+        concurrency = args.get(
+            "concurrency", ",".join(str(c) for c in DEFAULT_CONCURRENCY_LEVELS)
+        )
 
     if profile_name not in BENCHMARK_PROFILES:
         return ToolResult(
@@ -897,7 +967,10 @@ def _handle_run_benchmark(
             tool="run_benchmark",
             success=False,
             output="",
-            error="GuideLLM requires an in-cluster benchmark Job configuration.",
+            error=(
+                "GuideLLM is cluster-only and requires an in-cluster benchmark "
+                "Job configuration."
+            ),
         )
     command_history.append(
         {
@@ -2001,7 +2074,7 @@ _TOOL_HANDLERS = {
 _POD_MANAGER_HANDLERS = {"create_vllm_pod", "delete_vllm_pod"}
 
 # Handlers that accept an executor override via pod_name arg
-_POD_AWARE_HANDLERS = {"run_command", "fetch_vllm_logs"}
+_POD_AWARE_HANDLERS = {"fetch_vllm_logs"}
 
 
 def dispatch_tool(
@@ -2100,6 +2173,7 @@ class AgentTools:
         kubeconfig: Optional[str] = None,
         benchmark_runner: Optional[ClusterBenchmarkRunner] = None,
         benchmark_target: Optional[str] = None,
+        command_executor: Optional[RemoteExecutor] = None,
     ):
         self.executor = executor
         self.vllm_endpoint = vllm_endpoint
@@ -2109,6 +2183,7 @@ class AgentTools:
         self.kubeconfig = kubeconfig
         self.benchmark_runner = benchmark_runner
         self.benchmark_target = benchmark_target
+        self.command_executor = command_executor
         self.command_history: list[dict] = []
 
     def get_tool_definitions(self) -> list[dict]:
@@ -2143,10 +2218,15 @@ class AgentTools:
         elif name == "check_preemptions":
             if "endpoint" not in args or not args.get("endpoint"):
                 args["endpoint"] = self.vllm_endpoint  # baseline default
+        selected_executor = (
+            self.command_executor
+            if name == "run_command" and self.command_executor is not None
+            else self.executor
+        )
         return dispatch_tool(
             name,
             args,
-            self.executor,
+            selected_executor,
             self.command_history,
             pod_manager=self.pod_manager,
             namespace=self.namespace,

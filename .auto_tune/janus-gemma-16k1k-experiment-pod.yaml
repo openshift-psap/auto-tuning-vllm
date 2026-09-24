@@ -16,7 +16,6 @@ spec:
     - --served-model-name=RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic
     - --tensor-parallel-size=4
     - --max-model-len=32768
-    - --enable-prefix-caching
     - --gpu-memory-utilization=0.90
     env:
     - name: HOME
@@ -27,6 +26,11 @@ spec:
       value: /tmp/.cache
     - name: TORCHINDUCTOR_CACHE_DIR
       value: /tmp/torchinductor
+    - name: HF_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: hf-token
+          key: HF_TOKEN
     ports:
     - name: http
       containerPort: 8000
@@ -48,7 +52,6 @@ spec:
     volumeMounts:
     - name: model-cache
       mountPath: /models
-      readOnly: true
   volumes:
   - name: model-cache
     persistentVolumeClaim:

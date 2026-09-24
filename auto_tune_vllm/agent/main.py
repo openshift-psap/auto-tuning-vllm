@@ -8,7 +8,6 @@ import atexit
 import json
 import os
 import sys
-import urllib.request
 
 from .agentic import AgenticRunner
 from .benchmark_job import ClusterBenchmarkRunner
@@ -16,7 +15,7 @@ from .llm import ClaudeClient, get_model_id
 from .pod_manager import PodManager
 from .reporter import Reporter, TuningReport
 from .ssh_client import SSHClient
-from .tools import PROFILE_CHOICES, AgentTools, OcExecutor, SSHExecutor
+from .tools import ClusterCurlExecutor, PROFILE_CHOICES, AgentTools, OcExecutor, SSHExecutor
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -265,6 +264,7 @@ def run_agent(args) -> None:
 
     # Create PodManager if --pod-template is provided
     pod_manager = None
+    cleanup_on_exit = True
     if args.pod_template:
         if not args.oc_mode:
             print("Error: --pod-template requires --oc-mode")
@@ -275,8 +275,13 @@ def run_agent(args) -> None:
             kubeconfig=args.kubeconfig,
             base_pod_yaml_path=args.pod_template,
         )
-        # Register cleanup to delete leftover experiment pods on exit
-        atexit.register(pod_manager.cleanup_all)
+        # Do not automatically retry a failed deletion after the agent pauses:
+        # a human must first inspect and resolve the reported cluster state.
+        def cleanup_at_exit() -> None:
+            if cleanup_on_exit:
+                pod_manager.cleanup_all()
+
+        atexit.register(cleanup_at_exit)
         print(f"  PodManager ready (namespace={args.oc_namespace})")
 
     benchmark_runner = None
@@ -287,6 +292,9 @@ def run_agent(args) -> None:
             namespace=args.oc_namespace,
             kubeconfig=args.kubeconfig,
             config=benchmark_config,
+            mlflow_uri=getattr(args, "mlflow_uri", None),
+            mlflow_experiment=getattr(args, "mlflow_experiment", "vllm-autotuning"),
+            mlflow_workspace=getattr(args, "mlflow_workspace", None),
         )
 
     # Create tools and agent
@@ -299,16 +307,27 @@ def run_agent(args) -> None:
         kubeconfig=args.kubeconfig,
         benchmark_runner=benchmark_runner,
         benchmark_target=benchmark_target,
+        command_executor=(
+            ClusterCurlExecutor(args.oc_namespace, args.kubeconfig)
+            if args.oc_mode
+            else None
+        ),
     )
 
     baseline_summary = None
     if benchmark_runner is not None:
         print_step("Verifying served model and running baseline benchmark Job...")
+        model_result = tools.dispatch(
+            "run_command", {"command": f"curl -fsS {args.vllm_endpoint}/v1/models"}
+        )
         try:
-            with urllib.request.urlopen(f"{args.vllm_endpoint}/v1/models") as response:
-                served_model = json.load(response)["data"][0]["id"]
-        except Exception as exc:
-            print(f"Error: Could not read the baseline model ID: {exc}")
+            json_start = model_result.output.index("{")
+            model_payload, _ = json.JSONDecoder().raw_decode(
+                model_result.output[json_start:]
+            )
+            served_model = model_payload["data"][0]["id"]
+        except (IndexError, KeyError, ValueError, json.JSONDecodeError) as exc:
+            print(f"Error: Could not read the baseline model ID: {model_result.error or exc}")
             sys.exit(1)
         if served_model != args.model:
             print(
@@ -340,6 +359,7 @@ def run_agent(args) -> None:
         profiles=args.profiles,
         max_tensor_parallel_size=getattr(args, "max_tensor_parallel_size", None),
         baseline_summary=baseline_summary,
+        optimization_objective=getattr(args, "optimization_objective", "throughput"),
     )
 
     # Run the agent loop
@@ -347,8 +367,12 @@ def run_agent(args) -> None:
     try:
         state = agent.run()
     finally:
-        # Ensure experiment pods are cleaned up even on exceptions
-        if pod_manager:
+        # A cleanup failure is a deliberate intervention boundary, not a
+        # background retry opportunity.
+        cleanup_on_exit = not agent.state.paused
+        if pod_manager and cleanup_on_exit:
+            # Prevent atexit from silently retrying a cleanup that failed here.
+            cleanup_on_exit = False
             pod_manager.cleanup_all()
 
     # Generate report

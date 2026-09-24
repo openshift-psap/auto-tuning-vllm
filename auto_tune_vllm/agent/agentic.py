@@ -22,6 +22,7 @@ class AgentState:
     actions_taken: list = field(default_factory=list)
     kernel_analysis: dict = field(default_factory=dict)
     done: bool = False
+    paused: bool = False
     success: bool = False
     summary: str = ""
 
@@ -37,7 +38,7 @@ ENVIRONMENT:
   `uv run python script.py`. Do NOT use raw pip or conda for installing packages.
 
 TOOLS AVAILABLE:
-- run_command: Execute shell commands on the vLLM pod/host (runs REMOTELY on pod)
+- run_command: Execute HTTP diagnostics in a disposable in-cluster curl pod
 - read_file: Read files from the vLLM pod/host (runs REMOTELY on pod)
 - write_file: Write files to the vLLM pod/host (runs REMOTELY on pod)
 - run_benchmark: Run GuideLLM benchmark as an in-cluster Job; it returns comparison-ready metrics
@@ -102,8 +103,10 @@ TUNING WORKFLOW (follow this order strictly):
       → Returns pod_name and endpoint (e.g. "http://localhost:8001")
    b. Call run_benchmark with the requested workload profile AND endpoint from step 2a
    c. Call fetch_vllm_logs with pod_name from step 2a (reads experiment pod logs)
-   d. Compare the returned GuideLLM metric rows directly with the supplied
-      baseline: higher output tokens/sec and lower TTFT/ITL/TPOT are better.
+   d. Compare each returned GuideLLM metric row only with the baseline row at
+      the SAME configured concurrency (or matching request rate, when using a
+      rate-controlled profile). Never compare a saturated throughput row with
+      a single-stream baseline row.
    e. Call delete_vllm_pod with pod_name from step 2a to clean up
 
 3. NEVER kill processes on the baseline pod. NEVER restart the baseline pod.
@@ -147,19 +150,19 @@ VLLM TUNABLE PARAMETERS (pass these to create_vllm_pod as vllm_args):
 2. --max-num-batched-tokens (256-32768, default auto): Max tokens per batch
 3. --gpu-memory-utilization (0.80-0.95, default 0.90): GPU memory for KV cache
 4. --enable-chunked-prefill (bool, default false): Chunk long prefills
-5. --enable-prefix-caching (bool, default false): Cache common prefixes
-6. --max-model-len (int, default auto): Max context length
-7. --enforce-eager (bool, default false): Disable CUDA graphs
-8. --tensor-parallel-size: Multi-GPU parallelism. Obey any runtime maximum supplied
+5. --max-model-len (int, default auto): Max context length
+6. --enforce-eager (bool, default false): Disable CUDA graphs
+7. --tensor-parallel-size: Multi-GPU parallelism. Obey any runtime maximum supplied
    in the agent context.
-9. --quantization (null/fp8/awq/gptq): Quantization method
-10. --scheduling-policy (fcfs/priority): Request scheduling
-11. --kv-cache-dtype (auto/fp8): KV cache data type. fp8 halves cache memory.
-12. --cuda-graph-max-capture-size (int, default ~2048): Max batch size for CUDA graphs
+8. --quantization (null/fp8/awq/gptq): Quantization method
+9. --scheduling-policy (fcfs/priority): Request scheduling
+10. --kv-cache-dtype (auto/fp8): KV cache data type. fp8 halves cache memory.
+11. --cuda-graph-max-capture-size (int, default ~2048): Max batch size for CUDA graphs
 
 KNOWN-GOOD TUNING PRACTICES (apply these early in your experiments):
-- ALWAYS enable prefix caching (--enable-prefix-caching). It reduces redundant
-  computation for repeated prefixes and almost never hurts performance.
+- Prefix caching uses vLLM's runtime default and is an IMMUTABLE study control.
+  Leave it unset: do not pass either --enable-prefix-caching or
+  --no-enable-prefix-caching to create_vllm_pod.
 - Increase --max-num-batched-tokens beyond the default. Larger batch sizes
   improve GPU utilization and throughput. Try 4096, 8192, or 16384.
 - Increase --max-num-seqs to allow more concurrent sequences when batching.
@@ -171,7 +174,7 @@ KNOWN-GOOD TUNING PRACTICES (apply these early in your experiments):
   Try 4096 or 8192.
 
 ANALYSIS GUIDELINES:
-- If TTFT is high: prefill is slow → try chunked-prefill or prefix-caching
+- If TTFT is high: prefill is slow → try chunked-prefill
 - If ITL is high: decode is slow → check batch size, GPU utilization
 - If throughput plateaus: may need more GPU memory for KV cache, or try
   --kv-cache-dtype fp8 to fit more tokens in cache
@@ -219,6 +222,7 @@ class AgenticRunner:
         enable_cost_optimization: bool = True,
         max_tensor_parallel_size: int | None = None,
         baseline_summary: str | None = None,
+        optimization_objective: str = "throughput",
     ):
         self.tools = tools
         self.llm = llm_client
@@ -237,32 +241,55 @@ class AgenticRunner:
         self.enable_cost_optimization = enable_cost_optimization
         self.max_tensor_parallel_size = max_tensor_parallel_size
         self.baseline_summary = baseline_summary
+        self.optimization_objective = optimization_objective
         # A deterministic baseline Job has already exercised the benchmark path.
         self._benchmark_called = baseline_summary is not None
         self._nudge_sent = False
 
-    def run(self) -> AgentState:
-        """Run the autonomous agent loop."""
+    def run(self, initialize: bool = True) -> AgentState:
+        """Run the autonomous agent loop.
+
+        ``initialize=False`` preserves the existing conversation for a user-
+        approved resume after a lifecycle pause.
+        """
         print(">> Starting vLLM performance tuning agent...", flush=True)
 
-        # Initialize conversation
-        runtime_constraints = "No additional runtime constraints were supplied."
-        if self.max_tensor_parallel_size is not None:
-            runtime_constraints = (
-                "Maximum tensor parallel size: "
-                f"{self.max_tensor_parallel_size}. Do not exceed it."
+        if initialize:
+            # Initialize the conversation only for a new run. A resume retains
+            # the complete decision and tool-result context.
+            runtime_constraints = "No additional runtime constraints were supplied."
+            if self.max_tensor_parallel_size is not None:
+                runtime_constraints = (
+                    "Maximum tensor parallel size: "
+                    f"{self.max_tensor_parallel_size}. Do not exceed it."
+                )
+            recipe_priority = (
+                "Use model-supported MTP (multi-token prediction) or speculative decoding "
+                "whenever compatible; then prioritize batching and concurrency recipes."
+                if self.optimization_objective == "throughput"
+                else "Use model-supported MTP or speculative decoding whenever compatible; "
+                "then prioritize TTFT, ITL, scheduling, prefill, and tail-latency recipes."
             )
 
-        self.messages = [
-            {
-                "role": "user",
-                "content": (
-                    f"""You are connected to a vLLM inference server (baseline pod).
+            self.messages = [
+                {
+                    "role": "user",
+                    "content": (
+                        f"""You are connected to a vLLM inference server (baseline pod).
 
 Baseline endpoint (port-forwarded): {self.vllm_endpoint}
 Model: {self.model_name}
 Profiles to benchmark: {", ".join(self.profiles)}
 Runtime constraints: {runtime_constraints}
+Optimization objective: {self.optimization_objective}
+Recipe search priority: {recipe_priority}
+MTP/speculative decoding is the default whenever the recipe or architecture
+confirms support. First ensure the isolated pod can start with that configuration,
+then benchmark it against the baseline before retaining it.
+If a verified recipe requires a public or authorized assistant/draft checkpoint
+that is absent from the mounted cache, you MAY configure vLLM to download that
+checkpoint in the isolated experiment pod. Do not skip MTP merely because the
+draft model is not already cached.
 
 CRITICAL RULES:
 - The BASELINE pod is NEVER modified or restarted. It serves as your reference.
@@ -274,17 +301,16 @@ CRITICAL RULES:
 EXACT STEPS (follow this order strictly):
 
 Phase 1 — Baseline (already completed deterministically before this loop):
-1. Call run_command with command="nvidia-smi" (1 tool call)
-2. Call run_command with command="cat /proc/1/cmdline | tr '\\0' ' '" (see vLLM launch args)
-3. Call fetch_vllm_logs (parses baseline pod's vLLM server config, memory, errors)
-4. Use the supplied baseline GuideLLM Job result as the reference. Do NOT rerun it.
+1. Call fetch_vllm_logs (parses baseline pod's vLLM server config, memory, errors)
+2. Use the supplied baseline GuideLLM Job result as the reference. Do NOT rerun it.
 
 Phase 2 — Experiments (repeat for each tuning attempt):
 5. Call create_vllm_pod with vllm_args (e.g. ["--enable-chunked-prefill"])
    → Note the returned pod_name and endpoint
 6. Call run_benchmark with profile="{self.profiles[0]}" AND endpoint from step 5
 7. Call fetch_vllm_logs with pod_name from step 5
-8. Compare the returned Job metric rows to the supplied baseline metrics.
+8. Compare each returned Job metric row only to the baseline row at the same
+   configured concurrency (or matching request rate for rate-controlled runs).
 9. Call delete_vllm_pod with pod_name from step 5
 
 Phase 3 — Completion:
@@ -297,12 +323,16 @@ Log inspection and metric comparison are mandatory after every experiment benchm
                         if self.baseline_summary
                         else ""
                     )
-                ),
-            }
-        ]
+                    ),
+                }
+            ]
 
         # Agentic loop
-        while not self.state.done and self.state.iteration < self.max_iterations:
+        while (
+            not self.state.done
+            and not self.state.paused
+            and self.state.iteration < self.max_iterations
+        ):
             self.state.iteration += 1
             print(
                 f"\n>> Iteration {self.state.iteration}/{self.max_iterations}",
@@ -360,7 +390,13 @@ Log inspection and metric comparison are mandatory after every experiment benchm
                     }
                 )
 
-        if not self.state.done:
+        if self.state.paused:
+            print(
+                ">> Agent paused for user intervention. Resolve the cleanup error "
+                "and call resume() to continue.",
+                flush=True,
+            )
+        elif not self.state.done:
             print(
                 ">> Max iterations reached. Extracting results from decision log...",
                 flush=True,
@@ -412,6 +448,8 @@ Log inspection and metric comparison are mandatory after every experiment benchm
             if block.type == "tool_use":
                 result = self._execute_tool(block.name, block.input, block.id)
                 tool_results.append(result)
+                if self.state.paused:
+                    break
 
         self.messages.append({"role": "user", "content": tool_results})
 
@@ -444,6 +482,13 @@ Log inspection and metric comparison are mandatory after every experiment benchm
             output = result.output or ""
             if result.error:
                 output = f"Error: {result.error}"
+            if name == "delete_vllm_pod" and not result.success:
+                self.state.paused = True
+                self.state.success = False
+                self.state.summary = (
+                    "Tuning paused for user intervention because experiment cleanup "
+                    f"failed: {result.error}"
+                )
 
             # Track state changes
             if name == "write_file":
@@ -498,6 +543,44 @@ Log inspection and metric comparison are mandatory after every experiment benchm
             "tool_use_id": tool_use_id,
             "content": output[:8000],  # Truncate long outputs
         }
+
+    def resume(
+        self, resolved_pod_name: str, user_message: str | None = None
+    ) -> AgentState:
+        """Resume a run paused by a failed experiment cleanup.
+
+        The caller must first resolve the reported cluster cleanup failure. This
+        method deliberately does not retry deletion on the user's behalf. It
+        verifies that the named Pod and Service are already gone first. Supply
+        ``user_message`` to tell the agent what failed, how it was resolved,
+        and any guardrail it should apply to future experiments.
+        """
+        if not self.state.paused:
+            raise RuntimeError("Agent is not paused for user intervention.")
+        if not resolved_pod_name:
+            raise ValueError("resolved_pod_name is required to resume a paused run.")
+        pod_manager = getattr(self.tools, "pod_manager", None)
+        if pod_manager is None:
+            raise RuntimeError("Cannot verify cleanup without a PodManager.")
+        pod_manager.confirm_cleanup_resolved(resolved_pod_name)
+        self.state.paused = False
+        intervention_note = user_message.strip() if user_message else ""
+        self.messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "The user resolved the experiment cleanup failure. Continue "
+                    "from the current state; do not retry the failed deletion."
+                    + (
+                        "\n\nUser intervention details (treat this as an operational "
+                        f"constraint for future experiments):\n{intervention_note}"
+                        if intervention_note
+                        else ""
+                    )
+                ),
+            }
+        )
+        return self.run(initialize=False)
 
     def _add_assistant_message(self, response):
         """Add assistant response to messages."""

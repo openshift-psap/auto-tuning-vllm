@@ -15,14 +15,18 @@ Usage:
 from __future__ import annotations
 
 import copy
+import json
 import os
-import signal
 import subprocess
 import tempfile
 import time
 from typing import Optional
 
 import yaml
+
+
+class ExperimentLifecycleError(RuntimeError):
+    """A terminal experiment startup failure with cluster diagnostics."""
 
 
 class PodManager:
@@ -53,11 +57,7 @@ class PodManager:
         self.namespace = namespace
         self.kubeconfig = kubeconfig
         self.base_yaml_path = base_pod_yaml_path
-        self.base_port = base_port
-        self.active_pods: dict[
-            str, dict
-        ] = {}  # pod_name -> {"port_forward_proc": ..., "local_port": ...}
-        self._next_port = base_port
+        self.active_pods: dict[str, dict] = {}
 
         # Load and validate the template once
         with open(self.base_yaml_path, "r") as f:
@@ -87,6 +87,17 @@ class PodManager:
         Appends ``vllm_args`` to the existing ``args`` list of the first
         container (assumed to be the vLLM container).
         """
+        prefix_cache_args = [
+            arg
+            for arg in vllm_args
+            if arg.split("=", 1)[0]
+            in {"--enable-prefix-caching", "--no-enable-prefix-caching"}
+        ]
+        if prefix_cache_args:
+            raise ValueError(
+                "Prefix caching is a fixed study control and cannot be changed "
+                f"by an experiment: {prefix_cache_args}"
+            )
         manifest = copy.deepcopy(self._template)
 
         # Set unique pod name
@@ -142,7 +153,7 @@ class PodManager:
             os.unlink(tmp_path)
 
     def _wait_for_ready(
-        self, pod_name: str, timeout: int = 120, poll_interval: int = 5
+        self, pod_name: str, timeout: int = 900, poll_interval: int = 5
     ) -> bool:
         """Poll pod readiness until ready or timeout.
 
@@ -164,19 +175,8 @@ class PodManager:
             phase = result.stdout.strip()
 
             if phase == "Failed" or phase == "Unknown":
-                # Pod failed to start — get events for debugging
-                events_cmd = oc_base + [
-                    "get",
-                    "events",
-                    "--field-selector",
-                    f"involvedObject.name={pod_name}",
-                    "--sort-by=.lastTimestamp",
-                ]
-                events_result = subprocess.run(
-                    events_cmd, capture_output=True, text=True, timeout=15
-                )
-                raise RuntimeError(
-                    f"Pod {pod_name} entered phase '{phase}'. Events:\n{events_result.stdout}"
+                raise ExperimentLifecycleError(
+                    self._failure_diagnostics(pod_name, f"phase={phase}")
                 )
 
             if phase == "Running":
@@ -196,9 +196,40 @@ class PodManager:
 
             time.sleep(poll_interval)
 
-        raise TimeoutError(
-            f"Pod {pod_name} not ready after {timeout}s (last phase: {phase})"
+        raise ExperimentLifecycleError(
+            self._failure_diagnostics(
+                pod_name, f"not Ready after {timeout}s (last phase={phase})"
+            )
         )
+
+    def _failure_diagnostics(self, pod_name: str, reason: str) -> str:
+        """Collect bounded startup diagnostics before cleanup removes the pod."""
+        oc_base = self._build_oc_base()
+        commands = {
+            "pod": oc_base + ["get", "pod", pod_name, "-o", "json"],
+            "events": oc_base
+            + [
+                "get",
+                "events",
+                "--field-selector",
+                f"involvedObject.name={pod_name}",
+                "--sort-by=.lastTimestamp",
+            ],
+            "logs": oc_base + ["logs", pod_name, "--tail=80"],
+        }
+        diagnostics: dict[str, str] = {"reason": reason}
+        for name, command in commands.items():
+            try:
+                result = subprocess.run(
+                    command, capture_output=True, text=True, timeout=20
+                )
+                text = (result.stdout or result.stderr).strip()
+                if text:
+                    diagnostics[name] = text[-4000:]
+            except subprocess.TimeoutExpired:
+                diagnostics[name] = "timed out while collecting diagnostics"
+        diagnostics["cleanup"] = "Resources were cleaned up."
+        return json.dumps({"experiment_lifecycle": "failed", **diagnostics})
 
     def _start_port_forward(
         self, pod_name: str, local_port: int, remote_port: int = 8000
@@ -242,9 +273,6 @@ class PodManager:
             (pod_name, endpoint_url) e.g. ("vllm-tune-1714000000", "http://localhost:8001")
         """
         pod_name = self._generate_pod_name()
-        local_port = self._next_port
-        self._next_port += 1
-
         print(
             f">> PodManager: Creating pod {pod_name} with args {vllm_args}", flush=True
         )
@@ -264,27 +292,18 @@ class PodManager:
             self._wait_for_ready(pod_name)
             print(f"   Pod {pod_name} is ready.", flush=True)
 
-            # Start port-forward
-            print(
-                f"   Starting port-forward :{local_port} -> {pod_name}:8000",
-                flush=True,
-            )
-            pf_proc = self._start_port_forward(pod_name, local_port)
-            print(f"   Port-forward active (pid={pf_proc.pid}).", flush=True)
-        except Exception:
+        except Exception as exc:
             # A failed readiness check happens before this pod is recorded in
             # active_pods, so clean both resources explicitly.
             self._delete_untracked_experiment(pod_name)
             raise
 
-        endpoint = f"http://localhost:{local_port}"
+        endpoint = f"http://{pod_name}:8000"
 
         self.active_pods[pod_name] = {
-            "port_forward_proc": pf_proc,
-            "local_port": local_port,
             "vllm_args": vllm_args,
             "endpoint": endpoint,
-            "cluster_endpoint": f"http://{pod_name}:8000",
+            "cluster_endpoint": endpoint,
         }
 
         return pod_name, endpoint
@@ -292,13 +311,18 @@ class PodManager:
     def _delete_untracked_experiment(self, pod_name: str) -> None:
         """Remove resources created before an experiment became active."""
         for resource in ("pod", "service"):
-            subprocess.run(
-                self._build_oc_base()
-                + ["delete", resource, pod_name, "--ignore-not-found"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
+            try:
+                subprocess.run(
+                    self._build_oc_base()
+                    + ["delete", resource, pod_name, "--ignore-not-found"],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+            except subprocess.TimeoutExpired:
+                # Preserve the original startup diagnostic; deletion is retried
+                # by the next profile provisioning/explicit cleanup operation.
+                pass
 
     def get_cluster_target(self, endpoint: str) -> Optional[str]:
         """Return the private Service URL corresponding to a local endpoint."""
@@ -315,20 +339,7 @@ class PodManager:
         pod_name : str
             Name of the pod to delete.
         """
-        info = self.active_pods.pop(pod_name, None)
-
-        # Kill port-forward
-        if info and info.get("port_forward_proc"):
-            proc = info["port_forward_proc"]
-            try:
-                os.kill(proc.pid, signal.SIGTERM)
-                proc.wait(timeout=5)
-            except (OSError, subprocess.TimeoutExpired):
-                try:
-                    os.kill(proc.pid, signal.SIGKILL)
-                except OSError:
-                    pass
-            print(f"   Port-forward for {pod_name} killed.", flush=True)
+        info = self.active_pods.get(pod_name)
 
         # Delete pod
         delete_cmd = self._build_oc_base() + [
@@ -338,30 +349,49 @@ class PodManager:
             "--grace-period=0",
             "--force",
         ]
-        result = subprocess.run(delete_cmd, capture_output=True, text=True, timeout=30)
-        if result.returncode == 0:
-            print(f"   Pod {pod_name} deleted.", flush=True)
-        else:
-            print(
-                f"   Warning: Failed to delete pod {pod_name}: {result.stderr}",
-                flush=True,
+        delete_error: str | None = None
+        try:
+            result = subprocess.run(
+                delete_cmd, capture_output=True, text=True, timeout=30
             )
+            if result.returncode == 0:
+                print(f"   Pod {pod_name} deleted.", flush=True)
+            else:
+                delete_error = result.stderr.strip() or "oc delete returned non-zero"
+        except subprocess.TimeoutExpired:
+            delete_error = "oc delete timed out after 30s"
 
         # The Service belongs exclusively to this experiment selector.
-        service_result = subprocess.run(
-            self._build_oc_base() + ["delete", "service", pod_name, "--ignore-not-found"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if service_result.returncode != 0:
-            print(
-                f"   Warning: Failed to delete Service {pod_name}: {service_result.stderr}",
-                flush=True,
+        try:
+            service_result = subprocess.run(
+                self._build_oc_base()
+                + ["delete", "service", pod_name, "--ignore-not-found"],
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
+            if service_result.returncode != 0:
+                service_error = (
+                    "failed to delete Service: "
+                    f"{service_result.stderr.strip() or 'oc delete returned non-zero'}"
+                )
+                delete_error = (
+                    f"{delete_error}; {service_error}" if delete_error else service_error
+                )
+        except subprocess.TimeoutExpired:
+            service_error = "Service deletion timed out after 30s"
+            delete_error = (
+                f"{delete_error}; {service_error}" if delete_error else service_error
+            )
+        if delete_error:
+            raise ExperimentLifecycleError(
+                f"Experiment cleanup failed for pod {pod_name}: {delete_error}. "
+                "User intervention is required; tuning has paused."
+            )
+        self.active_pods.pop(pod_name, None)
 
     def cleanup_all(self) -> None:
-        """Delete all active experiment pods. Called at agent exit."""
+        """Delete all active experiment pods or raise a terminal cleanup error."""
         pod_names = list(self.active_pods.keys())
         if not pod_names:
             return
@@ -370,11 +400,41 @@ class PodManager:
             f">> PodManager: Cleaning up {len(pod_names)} experiment pod(s)...",
             flush=True,
         )
+        failures: list[str] = []
         for pod_name in pod_names:
             try:
                 self.delete_pod(pod_name)
-            except Exception as e:
-                print(f"   Warning: cleanup failed for {pod_name}: {e}", flush=True)
+            except Exception as exc:
+                failures.append(str(exc))
+        if failures:
+            raise ExperimentLifecycleError("; ".join(failures))
+
+    def confirm_cleanup_resolved(self, pod_name: str) -> None:
+        """Acknowledge user-remediated cleanup after verifying resources are gone.
+
+        This is intentionally an explicit operation: it never deletes or retries
+        resources. It only permits a paused controller to resume after the user
+        has fixed the reported cluster-side failure.
+        """
+        for resource in ("pod", "service"):
+            result = subprocess.run(
+                self._build_oc_base() + ["get", resource, pod_name],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0:
+                raise ExperimentLifecycleError(
+                    f"Cannot resume: {resource} {pod_name} still exists. "
+                    "Remove it, then confirm cleanup again."
+                )
+            stderr = result.stderr.lower()
+            if "notfound" not in stderr and "not found" not in stderr:
+                raise ExperimentLifecycleError(
+                    f"Cannot verify cleanup for {resource} {pod_name}: "
+                    f"{result.stderr.strip() or 'oc get failed'}"
+                )
+        self.active_pods.pop(pod_name, None)
 
     def get_active_pods(self) -> dict[str, dict]:
         """Return info about active experiment pods."""

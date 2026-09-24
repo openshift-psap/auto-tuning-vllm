@@ -48,6 +48,8 @@ def render_environment_resources(profile: TuningProfile) -> list[dict[str, Any]]
         runtime=runtime,
         resources=resources,
         pvc_name=pvc_name,
+        hf_secret_name=_required_string(access, "secret_name"),
+        hf_secret_key=_required_string(access, "secret_key"),
     )
     downloader = _downloader_container(
         image=image,
@@ -102,6 +104,7 @@ def render_environment_resources(profile: TuningProfile) -> list[dict[str, Any]]
             "metadata": {"name": baseline_name},
             "spec": {
                 "replicas": 1,
+                "strategy": {"type": "Recreate", "rollingUpdate": None},
                 "selector": {
                     "matchLabels": {"app.kubernetes.io/name": baseline_name}
                 },
@@ -155,6 +158,8 @@ def _vllm_container(
     runtime: dict[str, Any],
     resources: dict[str, Any],
     pvc_name: str,
+    hf_secret_name: str,
+    hf_secret_key: str,
 ) -> dict[str, Any]:
     max_model_len = runtime.get("max_model_len")
     if not isinstance(max_model_len, int) or max_model_len < 1:
@@ -179,6 +184,12 @@ def _vllm_container(
             {"name": "USER", "value": "vllm"},
             {"name": "XDG_CACHE_HOME", "value": "/tmp/.cache"},
             {"name": "TORCHINDUCTOR_CACHE_DIR", "value": "/tmp/torchinductor"},
+            {
+                "name": "HF_TOKEN",
+                "valueFrom": {
+                    "secretKeyRef": {"name": hf_secret_name, "key": hf_secret_key}
+                },
+            },
         ],
         "ports": [{"name": "http", "containerPort": 8000}],
         "readinessProbe": {
@@ -198,9 +209,7 @@ def _vllm_container(
                 "nvidia.com/gpu": resources["gpus"],
             },
         },
-        "volumeMounts": [
-            {"name": "model-cache", "mountPath": "/models", "readOnly": True}
-        ],
+        "volumeMounts": [{"name": "model-cache", "mountPath": "/models"}],
     }
 
 
