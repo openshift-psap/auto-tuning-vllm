@@ -67,6 +67,11 @@ def test_rendered_environment_keeps_profile_constraints_out_of_manifests():
     assert "--max-model-len=32768" in container["args"]
     assert experiment["spec"]["containers"][0]["args"] == container["args"]
     assert container["volumeMounts"][0].get("readOnly") is None
+    for workload in (deployment["spec"]["template"]["spec"], experiment["spec"]):
+        assert {"name": "dshm", "emptyDir": {"medium": "Memory", "sizeLimit": "2Gi"}} in workload[
+            "volumes"
+        ]
+    assert {"name": "dshm", "mountPath": "/dev/shm"} in container["volumeMounts"]
 
 
 def test_job_complete_recognizes_completed_download(monkeypatch):

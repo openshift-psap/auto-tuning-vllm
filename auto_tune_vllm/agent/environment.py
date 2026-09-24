@@ -39,6 +39,7 @@ def render_environment_resources(profile: TuningProfile) -> list[dict[str, Any]]
     max_tp = profile.max_tensor_parallel_size
     if max_tp is None:
         raise ValueError("A provisionable profile requires max_tensor_parallel_size")
+    shared_memory_volume = _shared_memory_volume(max_tp)
 
     container = _vllm_container(
         image=image,
@@ -118,7 +119,7 @@ def render_environment_resources(profile: TuningProfile) -> list[dict[str, Any]]
                     "spec": {
                         "nodeSelector": node_selector,
                         "containers": [container],
-                        "volumes": _model_cache_volume(pvc_name),
+                        "volumes": _model_cache_volume(pvc_name) + shared_memory_volume,
                     },
                 },
             },
@@ -143,7 +144,7 @@ def render_environment_resources(profile: TuningProfile) -> list[dict[str, Any]]
                 "restartPolicy": "Never",
                 "nodeSelector": node_selector,
                 "containers": [container],
-                "volumes": _model_cache_volume(pvc_name),
+                "volumes": _model_cache_volume(pvc_name) + shared_memory_volume,
             },
         },
     ]
@@ -209,7 +210,14 @@ def _vllm_container(
                 "nvidia.com/gpu": resources["gpus"],
             },
         },
-        "volumeMounts": [{"name": "model-cache", "mountPath": "/models"}],
+        "volumeMounts": [
+            {"name": "model-cache", "mountPath": "/models"},
+            *(
+                [{"name": "dshm", "mountPath": "/dev/shm"}]
+                if max_tp > 1
+                else []
+            ),
+        ],
     }
 
 
@@ -251,6 +259,13 @@ def _downloader_container(
 
 def _model_cache_volume(pvc_name: str) -> list[dict[str, Any]]:
     return [{"name": "model-cache", "persistentVolumeClaim": {"claimName": pvc_name}}]
+
+
+def _shared_memory_volume(max_tp: int) -> list[dict[str, Any]]:
+    """Allocate shared memory for multi-process tensor-parallel vLLM workers."""
+    if max_tp <= 1:
+        return []
+    return [{"name": "dshm", "emptyDir": {"medium": "Memory", "sizeLimit": "2Gi"}}]
 
 
 def _required_mapping(data: dict[str, Any], key: str) -> dict[str, Any]:

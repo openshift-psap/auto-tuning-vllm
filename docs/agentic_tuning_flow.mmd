@@ -1,8 +1,10 @@
-%%{init: {"theme":"base","themeVariables":{"fontFamily":"Montserrat, Arial, sans-serif","fontSize":"36px"},"themeCSS":".nodeLabel, .nodeLabel p, .edgeLabel, .edgeLabel p { font-family: Montserrat, Arial, sans-serif !important; }","flowchart":{"nodeSpacing":24,"rankSpacing":40}}}%%
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Montserrat, Arial, sans-serif","fontSize":"36px"},"themeCSS":".nodeLabel, .nodeLabel p, .edgeLabel, .edgeLabel p { font-family: Montserrat, Arial, sans-serif !important; }","flowchart":{"nodeSpacing":24,"rankSpacing":40,"wrappingWidth":300}}}%%
 flowchart LR
     P["Profile<br/>fresh baseline"] --> B["Baseline<br/>GuideLLM Job"]
-    B --> A["AgenticRunner<br/>baseline in context"]
-    R["Recipes + PR index<br/>candidate ideas"] -.-> A
+    B --> C["Optional cleanup<br/>Deployment + Service"]
+    C --> A["AgenticRunner<br/>baseline rows in context"]
+    A -->|tool call| R["Recipe tool + PR index<br/>version guard"]
+    R --> A
     A --> E["Candidate Pod + Service<br/>Job → logs → compare → delete"]
     E --> A
     E -. cleanup error .-> X["Pause"]
@@ -12,7 +14,7 @@ flowchart LR
     classDef job fill:#eaf6fb,stroke:#0d9ec5,stroke-width:3px,color:#303341;
     classDef agent fill:#eee8fa,stroke:#6141a2,stroke-width:4px,color:#303341;
     classDef caution fill:#fff0f9,stroke:#f90094,stroke-width:3px,color:#303341;
-    class P,E,R,O config;
+    class P,C,E,R,O config;
     class B job;
     class A agent;
     class X caution;

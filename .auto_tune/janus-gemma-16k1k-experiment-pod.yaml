@@ -10,7 +10,7 @@ spec:
     kubernetes.io/hostname: psap-de-h200-cluster-6mgmp-gpu-h200-7zgjh
   containers:
   - name: vllm
-    image: vllm/vllm-openai:v0.24.0
+    image: vllm/vllm-openai:v0.30.0
     args:
     - /models/RedHatAI--gemma-4-26B-A4B-it-FP8-dynamic
     - --served-model-name=RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic
@@ -52,7 +52,13 @@ spec:
     volumeMounts:
     - name: model-cache
       mountPath: /models
+    - name: dshm
+      mountPath: /dev/shm
   volumes:
   - name: model-cache
     persistentVolumeClaim:
       claimName: vllm-model-cache
+  - name: dshm
+    emptyDir:
+      medium: Memory
+      sizeLimit: 2Gi

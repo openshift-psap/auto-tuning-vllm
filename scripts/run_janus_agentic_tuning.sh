@@ -13,17 +13,19 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_dir=$(cd -- "$script_dir/.." && pwd)
 script_path="$script_dir/$(basename -- "${BASH_SOURCE[0]}")"
 
-metadata_dir=${CONTROLLER_METADATA_DIR:-/tmp/agentic-tuning-controller}
+metadata_root=${CONTROLLER_LOG_ROOT:-/tmp/agentic-tuning-controller}
 profile=${TUNING_PROFILE:-examples/agent/profiles/janus-gemma-32k1k.yaml}
 kubeconfig=${JANUS_KUBECONFIG:-/home/thibrahi/kubeconfigs/kubeconfig_files/janus}
 anthropic_key_file=${ANTHROPIC_KEY_FILE:-/home/thibrahi/creds/claude-dev-key}
 mlflow_credentials_file=${MLFLOW_CREDENTIALS_FILE:-/home/thibrahi/creds/mlflow}
 report_dir=${AGENT_REPORT_DIR:-agent_reports/janus-gemma-16k1k-clean}
 timestamp=${2:-$(date -u +%Y%m%dT%H%M%SZ)}
-controller_log="$metadata_dir/controller-$timestamp.log"
+run_log_dir=${CONTROLLER_RUN_LOG_DIR:-"$metadata_root/$timestamp"}
+metadata_dir=${CONTROLLER_METADATA_DIR:-"$run_log_dir"}
+controller_log=${CONTROLLER_LOG_FILE:-"$run_log_dir/controller.log"}
 session_name=${TMUX_SESSION_NAME:-janus-agentic-tuning-$timestamp}
 
-mkdir -p "$metadata_dir"
+mkdir -p "$run_log_dir"
 
 read_credential() {
     local field=$1
@@ -41,11 +43,17 @@ if [[ ${1:-} != "--foreground" ]]; then
         echo "Controller session already exists: $session_name" >&2
         exit 1
     fi
-    CONTROLLER_METADATA_DIR="$metadata_dir" tmux new-session -d -s "$session_name" \
+    ln -sfn "$timestamp" "$metadata_root/latest"
+    CONTROLLER_LOG_ROOT="$metadata_root" \
+        CONTROLLER_RUN_LOG_DIR="$run_log_dir" \
+        CONTROLLER_METADATA_DIR="$metadata_dir" \
+        CONTROLLER_LOG_FILE="$controller_log" \
+        tmux new-session -d -s "$session_name" \
         "exec $(printf '%q' "$script_path") --foreground $(printf '%q' "$timestamp")"
     echo "Controller session: $session_name"
     echo "Controller log: $controller_log"
-    echo "Metadata directory: $metadata_dir"
+    echo "Study logs: $run_log_dir"
+    echo "Latest logs: $metadata_root/latest"
     exit 0
 fi
 

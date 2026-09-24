@@ -133,7 +133,7 @@ VLLM TUNABLE PARAMETERS (pass these to create_vllm_pod as vllm_args):
 1. --max-num-seqs (1-1024, default 256): Max concurrent sequences per iteration
 2. --max-num-batched-tokens (256-32768, default auto): Max tokens per batch
 3. --gpu-memory-utilization (0.80-0.95, default 0.90): GPU memory for KV cache
-4. --enable-chunked-prefill (bool, default false): Chunk long prefills
+4. --enable-chunked-prefill (bool, default true): Chunk long prefills
 5. --max-model-len (int, default auto): Max context length
 6. --enforce-eager (bool, default false): Disable CUDA graphs
 7. --tensor-parallel-size: Multi-GPU parallelism. Obey any runtime maximum supplied
@@ -148,7 +148,9 @@ KNOWN-GOOD TUNING PRACTICES (apply these early in your experiments):
   Leave it unset: do not pass either --enable-prefix-caching or
   --no-enable-prefix-caching to create_vllm_pod.
 - Increase --max-num-batched-tokens beyond the default. Larger batch sizes
-  improve GPU utilization and throughput. Try 4096, 8192, or 16384.
+  improve GPU utilization and throughput. Try 16384 if we think the prefill
+  throughput appears to be the bottleneck. Default is 8192 on any large GPU.
+  More often useful on long prefill workloads.
 - Increase --max-num-seqs to allow more concurrent sequences when batching.
 - Set --kv-cache-dtype fp8 to use FP8 quantization for the KV cache. This
   halves KV cache memory usage, allowing more sequences or longer contexts,
@@ -156,14 +158,27 @@ KNOWN-GOOD TUNING PRACTICES (apply these early in your experiments):
 - Increase --cuda-graph-max-capture-size (default ~2048). Larger values allow
   CUDA graphs to cover bigger batch sizes, reducing kernel launch overhead.
   Try 4096 or 8192.
+- Never enable enforce-eager. It is a performance regression.
+- Quantization is dependent on the hardware. If H100, or H200, you can use
+  fp8 almost always. You can use nvfp4 under certain models if we are
+  memory constrained - you can find it in KV Cache Usage in the vllm logs.
+  B200, and B300s can use nvfp4 natively for best performance.
+- chunk prefill should always be enabled. It's the default and don't bother setting it.
+- async-scheduling can be another useful experiment to try if we're optimizing
+  throughput. Sometimes this can also help with latency.
+- Don't bother with the scheduling policy for now. It's not useful.
+- max-model-len can be tuned down to the input + output length if vLLM runs into
+  OOM errors at the model's max model length.
+- Try at least 5 different experiments before calling done.
 
 ANALYSIS GUIDELINES:
-- If TTFT is high: prefill is slow → try chunked-prefill
-- If ITL is high: decode is slow → check batch size, GPU utilization
+- If TTFT is high: prefill is slow → try increasing max-num-batched-tokens if prefill heavy workload
+- If ITL is high: decode is slow → check batch size, GPU utilization, and KV Cache Usage in the vllm logs
 - If throughput plateaus: may need more GPU memory for KV cache, or try
   --kv-cache-dtype fp8 to fit more tokens in cache
 - If OOM errors: reduce gpu-memory-utilization or max-num-seqs, or try
-  --kv-cache-dtype fp8 to reduce cache memory
+  --kv-cache-dtype fp8 to reduce cache memory. Can also check the vLLM logs
+  for the kv-cache-size flag suggestion.
 - If all requests error: check vLLM health, model loading, port-forwarding
 
 STOPPING CRITERIA:

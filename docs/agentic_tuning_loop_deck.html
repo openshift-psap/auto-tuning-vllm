@@ -87,7 +87,7 @@
     <div class="brand">DEVCONF<small>.US</small></div>
     <div class="cover-main">
       <h1>Inside the vLLM<br>agentic tuning loop</h1>
-      <p>Current control flow after commits 50ac537 and c72716b: in-cluster GuideLLM, study controls, experiment lifecycle, and knowledge inputs</p>
+      <p>Control flow at 23f7081: baseline Job, optional resource release, version-guarded recipe tool, candidate Pods, and comparison</p>
     </div>
     <div class="foot">01 / 11 · implementation walkthrough</div>
   </section>
@@ -95,7 +95,7 @@
   <section class="slide">
     <div class="kicker">Architecture · generated from Mermaid source</div>
     <h2>Study setup → baseline → candidate loop</h2>
-    <div class="mermaid-diagram"><img src="agentic_tuning_flow.svg" alt="Mermaid flow diagram: profile provisioning creates a fresh baseline; a baseline GuideLLM Job feeds AgenticRunner; recipes and the PR index supply candidate ideas; the agent creates a candidate Pod, benchmarks, inspects logs, compares, deletes, then loops or reports; cleanup failure pauses the run."></div>
+    <div class="mermaid-diagram"><img src="agentic_tuning_flow.svg" alt="Mermaid flow diagram: a profile creates a fresh baseline and GuideLLM Job; optional cleanup releases its Deployment and Service; AgenticRunner calls the recipe and PR tools, then creates a candidate Pod, benchmarks, inspects logs, compares and deletes; cleanup failure pauses the run."></div>
     <div class="foot">02 / 11 <span class="source">Editable source: docs/agentic_tuning_flow.mmd</span></div><div class="footer-mark">DEV<br>CONF<br>.US</div>
   </section>
 
@@ -113,7 +113,7 @@
       <div class="panel"><h3>Provisioning sequence</h3><p>Copy model-access secret; apply model and results PVCs; run downloader only if incomplete. Apply baseline Deployment and Service. If the Deployment existed, issue <code>oc rollout restart</code>; then wait for rollout status.</p></div>
       <div class="panel"><h3>Study inputs</h3><p>The profile supplies model, GPU resources, TP ceiling, base vLLM args, selected workload, and <code>optimization.objective</code> (<code>throughput</code> or <code>latency</code>). Candidate manifests derive from the same rendered container spec.</p></div>
     </div>
-    <div class="note">The model-cache PVC persists across studies. The “do not restart baseline” rule applies inside the tuning loop, after this deterministic study setup.</div>
+    <div class="note">After the baseline Job, <code>cleanup_after_benchmark</code> can delete its Deployment and Service before the loop (enabled in the Janus profile). The model-cache and results PVCs persist.</div>
     <div class="railmark">DEV<br>CONF<br>.US</div><div class="foot">03 / 11</div>
   </section>
 
@@ -139,7 +139,8 @@ while not done and not paused and iteration &lt; cap:
       </div>
       <div class="panel">
         <h3>State and context</h3>
-        <p>The controller checks <code>/v1/models</code> against the configured model, runs the baseline GuideLLM Job, and injects its metric rows into the first user message.</p>
+        <p>The controller checks <code>/v1/models</code>, runs the baseline GuideLLM Job, optionally deletes baseline compute, and injects metric rows into the first user message.</p>
+        <p>Recipe fetching is a model-requested tool call inside this loop, not a controller startup prefetch.</p>
         <p><code>AgentState</code> now includes <code>paused</code>. A failed <code>delete_vllm_pod</code> stops the loop; <code>resume()</code> first verifies the Pod and Service are absent.</p>
         <p>Each tool call records iteration, inputs, and up to 4,000 output characters in <code>decision_log</code>.</p>
       </div>
@@ -159,6 +160,7 @@ while not done and not paused and iteration &lt; cap:
         <tr><td><code>run_benchmark</code></td><td>In-cluster GuideLLM Job</td><td>Default target is baseline Service. Candidate endpoint must match an active Pod; it maps to that Pod's Service.</td></tr>
         <tr><td><code>create_vllm_pod</code>, <code>delete_vllm_pod</code></td><td><code>PodManager</code> → <code>oc</code></td><td>Create/delete both Pod and private Service. The returned endpoint is <code>http://&lt;pod-name&gt;:8000</code>.</td></tr>
         <tr><td><code>search_vllm_prs</code></td><td>Local SQLite FTS5</td><td>Query merged PR metadata using optional architecture and hardware facets.</td></tr>
+        <tr><td><code>fetch_vllm_recipe</code></td><td>Controller HTTP fetch</td><td>Match model recipe; default model, hardware and runtime version come from study context. Incompatible recipe args are withheld.</td></tr>
       </tbody>
     </table>
     <div class="note">The active Job path returns metric rows from <code>oc logs job/…</code>. JSON and CSV are written to the cluster results PVC; controller-local JSON comparison tools are not part of this path.</div>
@@ -173,8 +175,9 @@ while not done and not paused and iteration &lt; cap:
       <dt>1 · Job</dt><dd><code>run_benchmark(profile=args.profiles[0])</code> starts GuideLLM against the baseline Service using profile benchmark concurrency and duration.</dd>
       <dt>2 · Result</dt><dd>Job writes JSON/CSV to the results PVC. <code>ClusterBenchmarkRunner._summarize</code> extracts completed-request, latency, and throughput rows from Job logs.</dd>
       <dt>3 · Context</dt><dd>The summary is passed as <code>baseline_summary</code> and inserted into the agent's first message. The agent is instructed not to rerun baseline.</dd>
+      <dt>4 · Release</dt><dd>If <code>cleanup_after_benchmark</code> is true, delete baseline Deployment and Service. A deletion error stops the controller before candidate trials.</dd>
     </dl>
-    <div class="note magenta">The benchmark handler rejects agent-supplied concurrency or duration that differs from the study policy. It does not currently enforce a fixed profile name.</div>
+    <div class="note magenta">The Janus profile enables release. Its agent prompt still asks for baseline logs after deletion; that diagnostic cannot succeed once the baseline Pod is gone.</div>
     <div class="railmark">DEV<br>CONF<br>.US</div><div class="foot">06 / 11</div>
   </section>
 
@@ -244,19 +247,20 @@ while not done and not paused and iteration &lt; cap:
     <h2>Recipe retrieval, PR search, and objective-guided selection</h2>
     <div class="cols two">
       <div class="panel">
-        <h3>Active recipe path</h3>
-        <p>The system prompt asks the agent to fetch <code>models.json</code> and a matched recipe via <code>run_command</code>, now executed in a disposable cluster curl Pod. It can fall back to family/architecture YAML in the recipes repository.</p>
+        <h3>Recipe tool in the model/tool loop</h3>
+        <p>The system prompt directs the agent to call <code>fetch_vllm_recipe</code> first. <code>AgentTools.dispatch</code> fills model ID, hardware, and runtime vLLM version; the controller fetches the catalog and closest recipe.</p>
+        <p>If <code>model.min_vllm_version</code> exceeds the runtime, the fetcher withholds recipe-only args, variants, and features and returns a warning.</p>
         <p><code>optimization.objective</code> changes candidate priority: throughput emphasizes compatible MTP/speculative decoding and batching; latency emphasizes TTFT, ITL, scheduling, and prefill.</p>
-        <span class="chip">cluster curl Pod</span><span class="chip">agent decision</span>
+        <span class="chip">agent tool call</span><span class="chip">version guard</span>
       </div>
       <div class="panel">
-        <h3>PR index and new prefetch module</h3>
+        <h3>PR index and recipe briefing</h3>
         <p><code>search_vllm_prs(query, architecture, hardware)</code> searches the local SQLite FTS5 database. The manifest records source, schema, generation time, and <strong>4,266</strong> merged PR documents.</p>
-        <p><code>recipe_fetcher.py</code> adds exact/normalized/token-overlap matching and extracts base args, hardware overrides, variants, and speculative decoding. In this checkout, it has no caller in the startup path.</p>
-        <span class="chip">PR search active</span><span class="chip">prefetch helper staged</span>
+        <p><code>recipe_fetcher.py</code> matches exact/normalized/token-overlap model IDs and formats base args, hardware overrides, variants, and speculative decoding as a tool result for the agent.</p>
+        <span class="chip">PR search active</span><span class="chip">recipe tool active</span>
       </div>
     </div>
-    <div class="note">Knowledge sources propose arguments; a candidate still runs through Pod → GuideLLM Job → matching-row comparison. The new prefetch helper is present in the repository but is not injected into the agent's first message by current code.</div>
+    <div class="note">Tool availability and prompt order do not force a call: recipe retrieval runs when the model invokes the tool. Every proposed argument still needs a candidate Pod → GuideLLM Job → matching-row comparison.</div>
     <div class="foot">10 / 11 <span class="source">SYSTEM_PROMPT · vllm_pr_index.py · data/vllm-pr-index.manifest.json</span></div><div class="footer-mark">DEV<br>CONF<br>.US</div>
   </section>
 
@@ -271,7 +275,7 @@ while not done and not paused and iteration &lt; cap:
       </div>
       <div class="panel">
         <h3>Committed, but not wired into this run path</h3>
-        <p><code>BenchmarkSpec</code> and <code>WarmupSpec</code> define a locked scored workload and unscored warmup (default concurrency 8 for 15 seconds). No current caller builds a spec or launches a warmup Job.</p>
+        <p><code>BenchmarkSpec</code> and <code>WarmupSpec</code> define a locked scored workload and unscored warmup (default concurrency 8 for 15 seconds). CLI warmup options are parsed, but no current caller builds the spec or launches a warmup Job.</p>
         <p><code>Reporter.generate</code> writes Markdown and JSON. The controller's pre-run baseline summary is not stored in <code>AgentState.baseline_results</code>; structured report metrics from Job rows may therefore be incomplete.</p>
       </div>
     </div>

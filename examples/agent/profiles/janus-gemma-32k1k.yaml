@@ -9,7 +9,7 @@ environment:
   hardware: H200
   node_selector:
     kubernetes.io/hostname: psap-de-h200-cluster-6mgmp-gpu-h200-7zgjh
-  image: vllm/vllm-openai:v0.24.0
+  image: vllm/vllm-openai:v0.30.0
   model:
     id: RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic
     cache_path: /models/RedHatAI--gemma-4-26B-A4B-it-FP8-dynamic
