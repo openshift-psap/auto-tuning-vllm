@@ -7,6 +7,7 @@ import yaml
 
 from auto_tune_vllm.agent.pod_manager import ExperimentLifecycleError, PodManager
 from auto_tune_vllm.agent.agentic import AgenticRunner
+from auto_tune_vllm.agent.tools import ToolResult
 
 
 @pytest.fixture
@@ -132,3 +133,26 @@ def test_resume_adds_user_intervention_context(monkeypatch):
     assert result is runner.state
     assert runner.tools.pod_manager.confirmed_pod == "vllm-tune-1"
     assert "Avoid deleting while it is down" in runner.messages[-1]["content"]
+
+
+def test_experiment_limit_counts_launched_pods_only():
+    class FakeTools:
+        def __init__(self):
+            self.calls = []
+
+        def dispatch(self, name, inputs):
+            self.calls.append((name, inputs))
+            return ToolResult(tool=name, success=True, output="pod created")
+
+    tools = FakeTools()
+    runner = AgenticRunner(llm_client=None, tools=tools, max_experiments=1)
+
+    first = runner._execute_tool("create_vllm_pod", {}, "first")
+    second = runner._execute_tool("create_vllm_pod", {}, "second")
+    diagnostic = runner._execute_tool("fetch_vllm_logs", {}, "logs")
+
+    assert runner.state.experiments_started == 1
+    assert "1/1" in first["content"]
+    assert "experiment limit reached" in second["content"]
+    assert diagnostic["content"] == "pod created"
+    assert [call[0] for call in tools.calls] == ["create_vllm_pod", "fetch_vllm_logs"]

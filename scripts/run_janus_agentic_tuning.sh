@@ -14,11 +14,11 @@ repo_dir=$(cd -- "$script_dir/.." && pwd)
 script_path="$script_dir/$(basename -- "${BASH_SOURCE[0]}")"
 
 metadata_root=${CONTROLLER_LOG_ROOT:-/tmp/agentic-tuning-controller}
-profile=${TUNING_PROFILE:-examples/agent/profiles/janus-gemma-32k1k.yaml}
+profile=${TUNING_PROFILE:-examples/agent/profiles/janus-nemotron-16k1k.yaml}
 kubeconfig=${JANUS_KUBECONFIG:-/home/thibrahi/kubeconfigs/kubeconfig_files/janus}
 anthropic_key_file=${ANTHROPIC_KEY_FILE:-/home/thibrahi/creds/claude-dev-key}
 mlflow_credentials_file=${MLFLOW_CREDENTIALS_FILE:-/home/thibrahi/creds/mlflow}
-report_dir=${AGENT_REPORT_DIR:-agent_reports/janus-gemma-16k1k-clean}
+report_dir=${AGENT_REPORT_DIR:-agent_reports/janus-nemotron-16k1k}
 timestamp=${2:-$(date -u +%Y%m%dT%H%M%SZ)}
 run_log_dir=${CONTROLLER_RUN_LOG_DIR:-"$metadata_root/$timestamp"}
 metadata_dir=${CONTROLLER_METADATA_DIR:-"$run_log_dir"}
@@ -30,7 +30,7 @@ mkdir -p "$run_log_dir"
 read_credential() {
     local field=$1
     local value
-    value=$(sed -n "s/^${field}[[:space:]]*//p" "$mlflow_credentials_file")
+    value=$(sed -n "s/^${field}[[:space:]]*[:=][[:space:]]*//p" "$mlflow_credentials_file")
     if [[ -z "$value" ]]; then
         echo "Missing $field in $mlflow_credentials_file" >&2
         exit 1

@@ -48,8 +48,12 @@ import sys
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from html import unescape
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Optional
+from urllib.parse import parse_qs, quote_plus, urlparse
+from urllib.request import Request, urlopen
 
 import yaml
 
@@ -77,6 +81,51 @@ class ToolResult:
         if self.error:
             d["error"] = self.error
         return d
+
+
+class _GoogleResultParser(HTMLParser):
+    """Extract ordinary result links and their visible titles from Google HTML."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.results: list[dict[str, str]] = []
+        self._href: str | None = None
+        self._text: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "a":
+            return
+        href = dict(attrs).get("href")
+        if not href:
+            return
+        if href.startswith("/url?"):
+            href = parse_qs(urlparse(href).query).get("q", [""])[0]
+        if href.startswith("http") and "google." not in urlparse(href).netloc:
+            self._href = href
+            self._text = []
+
+    def handle_data(self, data: str) -> None:
+        if self._href is not None:
+            self._text.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag != "a" or self._href is None:
+            return
+        title = " ".join("".join(self._text).split())
+        if title and not any(result["url"] == self._href for result in self.results):
+            self.results.append({"title": unescape(title), "url": self._href})
+        self._href = None
+        self._text = []
+
+
+def _google_search(query: str, limit: int = 5) -> list[dict[str, str]]:
+    """Perform a bounded public Google search from the controller."""
+    url = f"https://www.google.com/search?hl=en&num={limit}&q={quote_plus(query)}"
+    request = Request(url, headers={"User-Agent": "Mozilla/5.0 auto-tune-vllm/1.0"})
+    with urlopen(request, timeout=15) as response:
+        parser = _GoogleResultParser()
+        parser.feed(response.read().decode("utf-8", errors="replace"))
+    return parser.results[:limit]
 
 
 # ---------------------------------------------------------------------------
@@ -405,6 +454,51 @@ PROFILE_CHOICES = list(BENCHMARK_PROFILES.keys()) or [
 # ---------------------------------------------------------------------------
 
 TOOL_DEFINITIONS: list[dict] = [
+    {
+        "name": "compact_context",
+        "description": (
+            "Replace prior agent conversation/tool history with a concise working "
+            "summary. Use after recording important evidence and decisions, to keep "
+            "the context focused. This cannot change the system prompt, tuning profile, "
+            "or safety controls."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "summary": {
+                    "type": "string",
+                    "description": "Evidence, experiment outcomes, active hypotheses, and next steps.",
+                }
+            },
+            "required": ["summary"],
+        },
+    },
+    {
+        "name": "search_web",
+        "description": (
+            "Search Google from the controller for an unexplained vLLM, CUDA, "
+            "Kubernetes, model, or hardware error. Use exact error text plus the "
+            "vLLM version/model/GPU where relevant. Returns up to five public links; "
+            "treat results as leads and validate every recommendation experimentally."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Specific Google query containing the unexplained error.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5,
+                    "default": 5,
+                    "description": "Maximum results to return (1-5).",
+                },
+            },
+            "required": ["query"],
+        },
+    },
     {
         "name": "fetch_vllm_recipe",
         "description": (
@@ -2151,6 +2245,54 @@ def _handle_search_vllm_prs(
         )
 
 
+def _handle_search_web(
+    args: dict,
+    _executor: RemoteExecutor,
+    command_history: list[dict],
+) -> ToolResult:
+    """Search Google for a diagnosis lead without running it in a cluster Pod."""
+    query = args.get("query")
+    limit = args.get("limit", 5)
+    if not isinstance(query, str) or not query.strip():
+        return ToolResult(
+            tool="search_web",
+            success=False,
+            output="",
+            error="query must be a non-empty string",
+        )
+    if not isinstance(limit, int) or not 1 <= limit <= 5:
+        return ToolResult(
+            tool="search_web",
+            success=False,
+            output="",
+            error="limit must be an integer from 1 to 5",
+        )
+
+    command_history.append({"tool": "search_web", "query": query, "limit": limit})
+    try:
+        results = _google_search(query, limit)
+    except Exception as exc:
+        command_history[-1]["success"] = False
+        return ToolResult(
+            tool="search_web",
+            success=False,
+            output="",
+            error=f"Google search failed: {exc}",
+        )
+    command_history[-1]["success"] = True
+    if not results:
+        return ToolResult(
+            tool="search_web",
+            success=True,
+            output="Google returned no extractable results. Refine the exact error query.",
+        )
+    return ToolResult(
+        tool="search_web",
+        success=True,
+        output=json.dumps(results, indent=2),
+    )
+
+
 def _handle_fetch_vllm_recipe(
     args: dict,
     _executor: RemoteExecutor,
@@ -2223,6 +2365,7 @@ _TOOL_HANDLERS = {
     "delete_vllm_pod": _handle_delete_vllm_pod,
     "done": _handle_done,
     "search_vllm_prs": _handle_search_vllm_prs,
+    "search_web": _handle_search_web,
     "fetch_vllm_recipe": _handle_fetch_vllm_recipe,
 }
 
@@ -2332,6 +2475,7 @@ class AgentTools:
         command_executor: Optional[RemoteExecutor] = None,
         vllm_version: Optional[str] = None,
         hardware: str = "H200",
+        recipe_model_id: Optional[str] = None,
     ):
         self.executor = executor
         self.vllm_endpoint = vllm_endpoint
@@ -2344,6 +2488,7 @@ class AgentTools:
         self.command_executor = command_executor
         self.vllm_version = vllm_version
         self.hardware = hardware
+        self.recipe_model_id = recipe_model_id
         self.command_history: list[dict] = []
 
     def get_tool_definitions(self) -> list[dict]:
@@ -2379,7 +2524,7 @@ class AgentTools:
             if "endpoint" not in args or not args.get("endpoint"):
                 args["endpoint"] = self.vllm_endpoint  # baseline default
         elif name == "fetch_vllm_recipe":
-            args.setdefault("model_id", self.model_name)
+            args.setdefault("model_id", self.recipe_model_id or self.model_name)
             args.setdefault("hardware", self.hardware)
             args.setdefault("runtime_vllm_version", self.vllm_version)
         selected_executor = (

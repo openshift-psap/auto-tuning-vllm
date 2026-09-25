@@ -7,8 +7,9 @@ from types import SimpleNamespace
 
 from auto_tune_vllm.agent.environment import render_environment_resources
 from auto_tune_vllm.agent.main import write_controller_metadata
+from auto_tune_vllm.agent.pod_manager import PodManager
 from auto_tune_vllm.agent.provision import _job_complete, cleanup_baseline
-from auto_tune_vllm.agent.tuning_profile import TuningProfile
+from auto_tune_vllm.agent.tuning_profile import TuningProfile, load_tuning_profile
 
 
 def _profile() -> TuningProfile:
@@ -134,3 +135,73 @@ def test_controller_metadata_excludes_credentials(tmp_path):
     recorded = path.read_text(encoding="utf-8")
     assert "must-not-appear" not in recorded
     assert '"event": "controller_started"' in recorded
+
+
+def test_experiment_delete_is_graceful_and_archives_first(tmp_path, monkeypatch):
+    template = tmp_path / "pod.yaml"
+    template.write_text(
+        "apiVersion: v1\nkind: Pod\nmetadata: {name: template}\nspec: {containers: [{name: vllm}]}",
+        encoding="utf-8",
+    )
+    manager = PodManager(
+        namespace="test",
+        base_pod_yaml_path=str(template),
+        artifact_dir=tmp_path / "artifacts",
+    )
+    manager.active_pods["experiment"] = {}
+    calls = []
+
+    monkeypatch.setattr(manager, "archive_pod_logs", lambda _pod_name: tmp_path)
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("auto_tune_vllm.agent.pod_manager.subprocess.run", fake_run)
+
+    manager.delete_pod("experiment")
+
+    pod_delete = next(command for command in calls if "pod" in command)
+    assert "--wait=true" in pod_delete
+    assert "--force" not in pod_delete
+    assert "--grace-period=0" not in pod_delete
+
+
+def test_profile_experiment_priorities_and_recipe_source(tmp_path):
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text(
+        """optimization:
+  objective: throughput
+  recipe_model_id: org/base-model
+  priority_items:
+    - FP8 KV cache
+    - batching
+workload:
+  benchmark_profiles: [long_context_16k_1k]
+constraints:
+  max_experiments: 7
+""",
+        encoding="utf-8",
+    )
+
+    profile = load_tuning_profile(profile_path)
+
+    assert profile.recipe_model_id == "org/base-model"
+    assert profile.priority_items == ["FP8 KV cache", "batching"]
+    assert profile.max_experiments == 7
+
+
+def test_experiment_rejects_vllm_quantization_flag(tmp_path):
+    template = tmp_path / "pod.yaml"
+    template.write_text(
+        "apiVersion: v1\nkind: Pod\nmetadata: {name: template}\nspec: {containers: [{name: vllm}]}",
+        encoding="utf-8",
+    )
+    manager = PodManager(namespace="test", base_pod_yaml_path=str(template))
+
+    try:
+        manager._build_pod_manifest("experiment", ["--quantization=fp8"])
+    except ValueError as exc:
+        assert "--quantization" in str(exc)
+    else:
+        raise AssertionError("Expected --quantization to be rejected")

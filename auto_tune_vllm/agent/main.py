@@ -308,6 +308,7 @@ def run_agent(args) -> None:
             namespace=args.oc_namespace,
             kubeconfig=args.kubeconfig,
             base_pod_yaml_path=args.pod_template,
+            artifact_dir=getattr(args, "controller_metadata_dir", None),
         )
         # Do not automatically retry a failed deletion after the agent pauses:
         # a human must first inspect and resolve the reported cluster state.
@@ -329,6 +330,7 @@ def run_agent(args) -> None:
             mlflow_uri=getattr(args, "mlflow_uri", None),
             mlflow_experiment=getattr(args, "mlflow_experiment", "vllm-autotuning"),
             mlflow_workspace=getattr(args, "mlflow_workspace", None),
+            artifact_dir=getattr(args, "controller_metadata_dir", None),
         )
 
     # Create tools and agent
@@ -352,6 +354,7 @@ def run_agent(args) -> None:
         ),
         vllm_version=getattr(args, "vllm_version", None),
         hardware=getattr(args, "recipe_hardware", "H200"),
+        recipe_model_id=getattr(args, "recipe_model_id", None),
     )
 
     baseline_summary = None
@@ -408,9 +411,12 @@ def run_agent(args) -> None:
         model_name=args.model,
         profiles=args.profiles,
         max_tensor_parallel_size=getattr(args, "max_tensor_parallel_size", None),
+        max_experiments=getattr(args, "max_experiments", None),
         baseline_summary=baseline_summary,
         optimization_objective=getattr(args, "optimization_objective", "throughput"),
         vllm_version=getattr(args, "vllm_version", None),
+        priority_items=getattr(args, "priority_items", None),
+        recipe_model_id=getattr(args, "recipe_model_id", None),
     )
 
     # Run the agent loop

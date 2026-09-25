@@ -17,6 +17,7 @@ class AgentState:
     """Current state of the agent."""
 
     iteration: int = 0
+    experiments_started: int = 0
     baseline_results: dict = field(default_factory=dict)
     current_results: dict = field(default_factory=dict)
     actions_taken: list = field(default_factory=list)
@@ -46,8 +47,10 @@ TOOLS AVAILABLE:
 - fetch_vllm_logs: Fetch + parse vLLM logs from pod with 120+ regex patterns (runs REMOTELY)
 - analyze_trace: Analyze a PyTorch profiler Chrome trace JSON (runs LOCALLY)
 - map_kernel: Map a CUDA kernel name to its source and category (runs LOCALLY)
+- search_web: Google-search an unexplained error from the controller
 - fetch_vllm_recipe: Fetch a model recipe on the controller with version compatibility enforcement
 - search_vllm_prs: Search the local index of merged vLLM PRs for relevant tuning work
+- compact_context: Replace only your prior working conversation with your own concise summary
 - create_vllm_pod: Create an experiment pod with extra vLLM args (returns pod_name + endpoint)
 - delete_vllm_pod: Delete an experiment pod and clean up port-forward
 - done: Signal completion with summary
@@ -79,8 +82,9 @@ TUNING WORKFLOW (follow this order strictly):
       vLLM PRs; use returned PRs as leads, then validate every idea by benchmarking.
 
 1. The baseline benchmark is performed before the agent loop and supplied in
-   the user context.  Read its completed-request, latency, and throughput rows
-   as the reference. Do not rerun it unless explicitly asked.
+   the user context. Its deployment may have been released after that benchmark.
+   Read its completed-request, latency, and throughput rows as the reference.
+   Do not rerun it or fetch its logs unless explicitly asked.
 
 2. For EACH tuning experiment:
    a. Call create_vllm_pod with vllm_args (e.g. ["--enable-chunked-prefill"])
@@ -93,8 +97,13 @@ TUNING WORKFLOW (follow this order strictly):
       a single-stream baseline row.
    e. Call delete_vllm_pod with pod_name from step 2a to clean up
 
-3. NEVER kill processes on the baseline pod. NEVER restart the baseline pod.
-   All tuning is done by creating fresh experiment pods with different args.
+   If an error remains unexplained after vLLM logs, Pod events, and benchmark
+   output, call search_web before choosing a workaround or declaring the
+   configuration unsupported. Query the exact error plus vLLM version, model
+   architecture, and GPU when known. Treat results as hypotheses and validate
+   each recommendation in an isolated experiment.
+
+3. All tuning is done by creating fresh experiment pods with different args.
 
 4. Call done with all comparison results when finished.
 
@@ -134,14 +143,20 @@ VLLM TUNABLE PARAMETERS (pass these to create_vllm_pod as vllm_args):
 2. --max-num-batched-tokens (256-32768, default auto): Max tokens per batch
 3. --gpu-memory-utilization (0.80-0.95, default 0.90): GPU memory for KV cache
 4. --enable-chunked-prefill (bool, default true): Chunk long prefills
-5. --max-model-len (int, default auto): Max context length
+5. --max-model-len (int): Do not tune this unless vLLM logs establish an OOM
+   caused by the configured context length. The workload's required context
+   length is otherwise immutable.
 6. --enforce-eager (bool, default false): Disable CUDA graphs
 7. --tensor-parallel-size: Multi-GPU parallelism. Obey any runtime maximum supplied
    in the agent context.
-8. --quantization (null/fp8/awq/gptq): Quantization method
-9. --scheduling-policy (fcfs/priority): Request scheduling
-10. --kv-cache-dtype (auto/fp8): KV cache data type. fp8 halves cache memory.
-11. --cuda-graph-max-capture-size (int, default ~2048): Max batch size for CUDA graphs
+8. --scheduling-policy (fcfs/priority): Request scheduling
+9. --kv-cache-dtype (auto/fp8): KV cache data type. fp8 halves cache memory.
+10. --cuda-graph-max-capture-size (int, default ~2048): Max batch size for CUDA graphs
+11. --performance-mode (balanced/interactivity/throughput, default balanced):
+    Runtime behavior policy. interactivity favors end-to-end per-request latency
+    at small batch sizes (fine-grained CUDA graphs and latency-oriented kernels);
+    throughput favors aggregate tokens/sec at high concurrency (larger CUDA
+    graphs, more aggressive batching, and throughput-oriented kernels).
 
 KNOWN-GOOD TUNING PRACTICES (apply these early in your experiments):
 - Prefix caching uses vLLM's runtime default and is an IMMUTABLE study control.
@@ -152,6 +167,14 @@ KNOWN-GOOD TUNING PRACTICES (apply these early in your experiments):
   throughput appears to be the bottleneck. Default is 8192 on any large GPU.
   More often useful on long prefill workloads.
 - Increase --max-num-seqs to allow more concurrent sequences when batching.
+- Keep --max-num-seqs near the highest required configured concurrency (or the
+  maximum measured concurrency for a request-rate-controlled profile). Modest
+  scheduler headroom is allowed—e.g. 55 for concurrency 50 or 300 for 250—and
+  leaving the vLLM default is also acceptable. Do not spend trials on values
+  far above that workload ceiling; excess sequence capacity cannot help.
+- Prefer lower-bit model checkpoints when supplied or recipe-supported; they
+  can improve both latency and bandwidth. NEVER pass vLLM --quantization:
+  model precision is selected by choosing the checkpoint, not a runtime flag.
 - Set --kv-cache-dtype fp8 to use FP8 quantization for the KV cache. This
   halves KV cache memory usage, allowing more sequences or longer contexts,
   with minimal accuracy impact.
@@ -159,17 +182,34 @@ KNOWN-GOOD TUNING PRACTICES (apply these early in your experiments):
   CUDA graphs to cover bigger batch sizes, reducing kernel launch overhead.
   Try 4096 or 8192.
 - Never enable enforce-eager. It is a performance regression.
-- Quantization is dependent on the hardware. If H100, or H200, you can use
-  fp8 almost always. You can use nvfp4 under certain models if we are
-  memory constrained - you can find it in KV Cache Usage in the vllm logs.
-  B200, and B300s can use nvfp4 natively for best performance.
+- Lower-bit KV cache types can improve both latency and memory bandwidth, but
+  first verify the model/runtime supports them and retain only stable results.
 - chunk prefill should always be enabled. It's the default and don't bother setting it.
 - async-scheduling can be another useful experiment to try if we're optimizing
   throughput. Sometimes this can also help with latency.
+- Test --performance-mode=throughput for throughput objectives at representative
+  high concurrency, and --performance-mode=interactivity for latency objectives
+  at small/representative batch sizes. Keep balanced as the baseline/default and
+  validate every mode against matching benchmark rows.
 - Don't bother with the scheduling policy for now. It's not useful.
-- max-model-len can be tuned down to the input + output length if vLLM runs into
-  OOM errors at the model's max model length.
+- Do not change --max-model-len proactively. Only reduce it after logs show an
+  OOM attributable to the configured context limit, and never below the workload
+  input plus output requirement.
 - Try at least 5 different experiments before calling done.
+
+EXPERIMENT STRATEGY:
+- Most knobs are independent. After validating compatible individual changes,
+  actively test documented stacks of compatible knobs; do not assume a
+  single-knob experiment is the final optimum.
+- If a feature or knob harms stability, archive and classify its failure, then
+  continue with unrelated candidates first. Return only with a specific,
+  evidence-backed hypothesis for making it stable.
+- Optimize primarily at interior/middle configured concurrency values. If the
+  list has no interior value (for example [1, 50]), prioritize the non-lowest
+  stream (50) and retain the lowest stream as a guardrail only.
+- You may call compact_context after preserving essential evidence in its
+  summary. It only replaces mutable working history; it cannot change this
+  system prompt, the user profile, benchmark rules, or safety controls.
 
 ANALYSIS GUIDELINES:
 - If TTFT is high: prefill is slow → try increasing max-num-batched-tokens if prefill heavy workload
@@ -199,12 +239,12 @@ REPORTING FORMAT:
   FINDINGS: <what you learned>
 
 RULES:
-- NEVER modify, kill, or restart the baseline pod
 - ALWAYS call fetch_vllm_logs and compare the returned Job metrics after each benchmark
-- ONE parameter change at a time (one experiment pod per tuning attempt)
+- Begin with isolated changes, then stack independent, already-compatible knobs
 - ALWAYS delete experiment pods after benchmarking (call delete_vllm_pod)
 - Compare metrics before versus after each change using the returned Job rows
-- Do NOT call done until you have 10 consecutive non-improving experiments"""
+- Do NOT call done until you have 10 consecutive non-improving experiments,
+  unless the configured hard experiment-pod limit is reached."""
 
 
 class AgenticRunner:
@@ -220,9 +260,12 @@ class AgenticRunner:
         profiles: list = None,
         enable_cost_optimization: bool = True,
         max_tensor_parallel_size: int | None = None,
+        max_experiments: int | None = None,
         baseline_summary: str | None = None,
         optimization_objective: str = "throughput",
         vllm_version: str | None = None,
+        priority_items: list[str] | None = None,
+        recipe_model_id: str | None = None,
     ):
         self.tools = tools
         self.llm = llm_client
@@ -240,9 +283,14 @@ class AgenticRunner:
         self.decision_log: list = []
         self.enable_cost_optimization = enable_cost_optimization
         self.max_tensor_parallel_size = max_tensor_parallel_size
+        self.max_experiments = max_experiments
         self.baseline_summary = baseline_summary
         self.optimization_objective = optimization_objective
         self.vllm_version = vllm_version
+        self.priority_items = priority_items or []
+        self.recipe_model_id = recipe_model_id
+        self._initial_context = ""
+        self._compaction_requested: str | None = None
         # A deterministic baseline Job has already exercised the benchmark path.
         self._benchmark_called = baseline_summary is not None
         self._nudge_sent = False
@@ -264,6 +312,13 @@ class AgenticRunner:
                     "Maximum tensor parallel size: "
                     f"{self.max_tensor_parallel_size}. Do not exceed it."
                 )
+            experiment_limit = (
+                f"Hard limit: {self.max_experiments} launched experiment pods. "
+                "After the final experiment is benchmarked, logged, and deleted, "
+                "summarize and call done."
+                if self.max_experiments is not None
+                else "No hard experiment-pod limit was supplied."
+            )
             recipe_priority = (
                 "Use model-supported MTP (multi-token prediction) or speculative decoding "
                 "whenever compatible; then prioritize batching and concurrency recipes."
@@ -271,6 +326,12 @@ class AgenticRunner:
                 else "Use model-supported MTP or speculative decoding whenever compatible; "
                 "then prioritize TTFT, ITL, scheduling, prefill, and tail-latency recipes."
             )
+            priority_context = (
+                "\n".join(f"- {item}" for item in self.priority_items)
+                if self.priority_items
+                else "No additional user-prioritized experiment themes were supplied."
+            )
+            recipe_context = self.recipe_model_id or self.model_name
 
             self.messages = [
                 {
@@ -278,13 +339,17 @@ class AgenticRunner:
                     "content": (
                         f"""You are connected to a vLLM inference server (baseline pod).
 
-Baseline endpoint (port-forwarded): {self.vllm_endpoint}
-Model: {self.model_name}
+Baseline endpoint (in-cluster): {self.vllm_endpoint}
+Served model: {self.model_name}
+Recipe source model: {recipe_context}
 Profiles to benchmark: {", ".join(self.profiles)}
 Runtime constraints: {runtime_constraints}
+Experiment limit: {experiment_limit}
 Optimization objective: {self.optimization_objective}
 Runtime vLLM version: {self.vllm_version or "unknown"}
 Recipe search priority: {recipe_priority}
+User-prioritized experiment themes:
+{priority_context}
 MTP/speculative decoding is the default whenever the recipe or architecture
 confirms support. First ensure the isolated pod can start with that configuration,
 then benchmark it against the baseline before retaining it.
@@ -297,17 +362,17 @@ the runtime and withholds incompatible recipe arguments. Do not recover those
 arguments from another source or use them in an experiment.
 
 CRITICAL RULES:
-- The BASELINE pod is NEVER modified or restarted. It serves as your reference.
 - To test tuning parameters, create EXPERIMENT pods with create_vllm_pod.
 - The baseline GuideLLM Job has already completed; use its metrics below as reference.
 - For experiment benchmarks, pass the endpoint returned by create_vllm_pod.
 - NEVER call done after a benchmark failure. Diagnose from vLLM logs instead.
+- The experiment-pod limit is authoritative. Do not attempt another
+  create_vllm_pod after it is reached; finish cleanup and report results.
 
 EXACT STEPS (follow this order strictly):
 
 Phase 1 — Baseline (already completed deterministically before this loop):
-1. Call fetch_vllm_logs (parses baseline pod's vLLM server config, memory, errors)
-2. Use the supplied baseline GuideLLM Job result as the reference. Do NOT rerun it.
+1. Use the supplied baseline GuideLLM Job result as the reference. Do NOT rerun it.
 
 Phase 2 — Experiments (repeat for each tuning attempt):
 5. Call create_vllm_pod with vllm_args (e.g. ["--enable-chunked-prefill"])
@@ -331,6 +396,7 @@ Log inspection and metric comparison are mandatory after every experiment benchm
                     ),
                 }
             ]
+            self._initial_context = self.messages[0]["content"]
 
         # Agentic loop
         while (
@@ -457,6 +523,19 @@ Log inspection and metric comparison are mandatory after every experiment benchm
                     break
 
         self.messages.append({"role": "user", "content": tool_results})
+        if self._compaction_requested is not None:
+            summary = self._compaction_requested
+            self._compaction_requested = None
+            self.messages = [
+                {
+                    "role": "user",
+                    "content": (
+                        f"{self._initial_context}\n\n"
+                        "AGENT-AUTHORED WORKING CONTEXT (prior tool history compacted):\n"
+                        f"{summary}"
+                    ),
+                }
+            ]
 
     def _execute_tool(self, name: str, inputs: dict, tool_use_id: str) -> dict:
         """Execute a single tool and return result."""
@@ -481,12 +560,39 @@ Log inspection and metric comparison are mandatory after every experiment benchm
             self.state.summary = inputs.get("summary", "")
             output = "Agent signaled completion."
 
+        elif name == "compact_context":
+            summary = str(inputs.get("summary", "")).strip()
+            if not summary:
+                output = "Error: compact_context requires a non-empty summary."
+            elif len(summary) > 6000:
+                output = "Error: compact_context summary must be 6000 characters or fewer."
+            else:
+                self._compaction_requested = summary
+                output = "Working context will be compacted after this tool response."
+
+        elif (
+            name == "create_vllm_pod"
+            and self.max_experiments is not None
+            and self.state.experiments_started >= self.max_experiments
+        ):
+            output = (
+                f"Error: experiment limit reached ({self.max_experiments} launched pods). "
+                "Do not create another experiment; complete cleanup and report results."
+            )
+
         else:
             # Dispatch to tools module (returns ToolResult dataclass)
             result = self.tools.dispatch(name, inputs)
             output = result.output or ""
             if result.error:
                 output = f"Error: {result.error}"
+            if name == "create_vllm_pod" and result.success:
+                self.state.experiments_started += 1
+                output = (
+                    f"{output}\nExperiment budget: {self.state.experiments_started}/"
+                    f"{self.max_experiments if self.max_experiments is not None else 'unlimited'} "
+                    "launched pods."
+                )
             if name == "delete_vllm_pod" and not result.success:
                 self.state.paused = True
                 self.state.success = False

@@ -6,6 +6,7 @@ import json
 import subprocess
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
@@ -19,6 +20,7 @@ class ClusterBenchmarkRunner:
     mlflow_uri: str | None = None
     mlflow_experiment: str = "vllm-autotuning"
     mlflow_workspace: str | None = None
+    artifact_dir: str | Path | None = None
 
     def run(
         self,
@@ -115,11 +117,108 @@ class ClusterBenchmarkRunner:
             check=False,
         )
         logs = self._oc(["logs", "-n", self.namespace, f"job/{job_name}"], check=False)
+        self._archive_job_diagnostics(job_name, logs.stdout, logs.stderr)
         if result.returncode:
             raise RuntimeError(f"GuideLLM Job {job_name} failed:\n{logs.stdout}\n{logs.stderr}")
         summary = self._summarize(job_name, target, logs.stdout)
         self._log_to_mlflow(job_name, model, profile, target, concurrency, logs.stdout)
         return summary
+
+    def _archive_job_diagnostics(
+        self, job_name: str, logs: str, log_stderr: str = ""
+    ) -> Path | None:
+        """Archive every GuideLLM Job-pod's logs and cluster diagnostics."""
+        if self.artifact_dir is None:
+            return None
+
+        job_dir = Path(self.artifact_dir) / "benchmarks" / job_name
+        job_dir.mkdir(parents=True, exist_ok=True)
+        content = logs
+        if log_stderr:
+            content += f"\n--- stderr ---\n{log_stderr}"
+        (job_dir / "guidellm.log").write_text(content, encoding="utf-8")
+
+        captures = {
+            "job.json": ["get", "job", job_name, "-n", self.namespace, "-o", "json"],
+            "pods.json": [
+                "get",
+                "pods",
+                "-n",
+                self.namespace,
+                "-l",
+                f"job-name={job_name}",
+                "-o",
+                "json",
+            ],
+            "events.txt": [
+                "get",
+                "events",
+                "-n",
+                self.namespace,
+                "--field-selector",
+                f"involvedObject.name={job_name}",
+                "--sort-by=.lastTimestamp",
+            ],
+        }
+        for filename, command in captures.items():
+            result = self._oc(command, check=False)
+            captured = result.stdout
+            if result.stderr:
+                captured += f"\n--- stderr ---\n{result.stderr}"
+            (job_dir / filename).write_text(captured, encoding="utf-8")
+
+            if filename != "pods.json":
+                continue
+            try:
+                pod_names = [
+                    item["metadata"]["name"]
+                    for item in json.loads(result.stdout).get("items", [])
+                ]
+            except (json.JSONDecodeError, KeyError, TypeError):
+                pod_names = []
+            for pod_name in pod_names:
+                current = self._oc(
+                    [
+                        "logs",
+                        "-n",
+                        self.namespace,
+                        f"pod/{pod_name}",
+                        "--all-containers=true",
+                        "--prefix=true",
+                    ],
+                    check=False,
+                )
+                current_content = current.stdout
+                if current.stderr:
+                    current_content += f"\n--- stderr ---\n{current.stderr}"
+                (job_dir / f"{pod_name}.current.log").write_text(
+                    current_content, encoding="utf-8"
+                )
+                if current.returncode:
+                    raise RuntimeError(
+                        f"Could not archive GuideLLM pod logs for {pod_name}: "
+                        f"{current.stderr.strip() or 'oc logs failed'}"
+                    )
+                previous = self._oc(
+                    [
+                        "logs",
+                        "-n",
+                        self.namespace,
+                        f"pod/{pod_name}",
+                        "--all-containers=true",
+                        "--prefix=true",
+                        "--previous=true",
+                    ],
+                    check=False,
+                )
+                previous_content = previous.stdout
+                if previous.stderr:
+                    previous_content += f"\n--- stderr ---\n{previous.stderr}"
+                (job_dir / f"{pod_name}.previous.log").write_text(
+                    previous_content, encoding="utf-8"
+                )
+        print(f"Archived benchmark diagnostics: {job_dir}", flush=True)
+        return job_dir
 
     def _log_to_mlflow(
         self,

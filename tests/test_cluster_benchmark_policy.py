@@ -1,7 +1,13 @@
 """Study-level consistency checks for cluster GuideLLM benchmarks."""
 
+from types import SimpleNamespace
+
 from auto_tune_vllm.agent.benchmark_job import ClusterBenchmarkRunner
-from auto_tune_vllm.agent.tools import ClusterCurlExecutor, _handle_run_benchmark
+from auto_tune_vllm.agent.tools import (
+    ClusterCurlExecutor,
+    _handle_run_benchmark,
+    _handle_search_web,
+)
 
 
 class FakeRunner:
@@ -89,3 +95,38 @@ def test_curl_pod_manifest_mounts_model_cache_without_overrides():
     assert container["image"] == "curlimages/curl:8.10.1"
     assert container["volumeMounts"][0]["readOnly"] is True
     assert manifest["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"] == "models"
+
+
+def test_benchmark_archives_job_pod_diagnostics(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_oc(self, args, **_kwargs):
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout="cluster diagnostic", stderr="")
+
+    monkeypatch.setattr(ClusterBenchmarkRunner, "_oc", fake_oc)
+    runner = ClusterBenchmarkRunner(
+        namespace="test",
+        kubeconfig="kubeconfig",
+        config={},
+        artifact_dir=tmp_path,
+    )
+
+    archived = runner._archive_job_diagnostics("guidellm-test", "benchmark log")
+
+    assert archived is not None
+    assert (archived / "guidellm.log").read_text() == "benchmark log"
+    assert (archived / "job.json").read_text() == "cluster diagnostic"
+    assert any("job-name=guidellm-test" in call for call in calls)
+
+
+def test_search_web_returns_bounded_controller_results(monkeypatch):
+    monkeypatch.setattr(
+        "auto_tune_vllm.agent.tools._google_search",
+        lambda query, limit: [{"title": query, "url": "https://example.test"}][:limit],
+    )
+
+    result = _handle_search_web({"query": "vLLM exact error", "limit": 1}, None, [])
+
+    assert result.success
+    assert "https://example.test" in result.output

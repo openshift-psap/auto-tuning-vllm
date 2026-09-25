@@ -43,12 +43,23 @@ def agent_command(
         min=1,
         help="Optional runtime ceiling for tensor parallel size",
     ),
+    max_experiments: Optional[int] = typer.Option(
+        None,
+        "--max-experiments",
+        min=1,
+        help="Hard cap on successfully launched experiment pods",
+    ),
     tuning_profile: Optional[Path] = typer.Option(
         None,
         "--tuning-profile",
         exists=True,
         dir_okay=False,
         help="YAML profile; provisions its environment before tuning by default",
+    ),
+    priority_item: Optional[list[str]] = typer.Option(
+        None,
+        "--priority-item",
+        help="Repeatable user-prioritized experiment theme; adds to profile priorities",
     ),
     provision: bool = typer.Option(
         True,
@@ -144,6 +155,8 @@ def agent_command(
     recipe_hardware = "H200"
     cleanup_baseline_after_benchmark = False
     optimization_objective = "throughput"
+    priority_items: list[str] = []
+    recipe_model_id: str | None = None
     if tuning_profile:
         from ..agent.tuning_profile import load_tuning_profile
 
@@ -152,7 +165,11 @@ def agent_command(
             profiles = profile.benchmark_profiles
         if max_tensor_parallel_size is None:
             max_tensor_parallel_size = profile.max_tensor_parallel_size
+        if max_experiments is None:
+            max_experiments = profile.max_experiments
         optimization_objective = profile.optimization_objective
+        priority_items = profile.priority_items
+        recipe_model_id = profile.recipe_model_id
         environment = profile.environment
         if environment is not None:
             model_config = environment.get("model")
@@ -219,6 +236,9 @@ def agent_command(
                     f"[cyan]Baseline available in-cluster at {vllm_endpoint}[/cyan]"
                 )
 
+    if priority_item:
+        priority_items = [*priority_items, *priority_item]
+
     if vllm_endpoint is None:
         raise typer.BadParameter(
             "--vllm-endpoint is required unless a provisioned tuning profile "
@@ -255,6 +275,7 @@ def agent_command(
         claude_model=claude_model,
         max_iterations=max_iterations,
         max_tensor_parallel_size=max_tensor_parallel_size,
+        max_experiments=max_experiments,
         profiles=profiles or ["balanced"],
         concurrency=concurrency,
         max_seconds=max_seconds,
@@ -274,6 +295,8 @@ def agent_command(
         benchmark_target=benchmark_target,
         curl_cache_pvc_name=curl_cache_pvc_name,
         optimization_objective=optimization_objective,
+        priority_items=priority_items,
+        recipe_model_id=recipe_model_id,
         vllm_version=vllm_version,
         recipe_hardware=recipe_hardware,
         cleanup_baseline_after_benchmark=cleanup_baseline_after_benchmark,

@@ -1,9 +1,18 @@
-name: janus-gemma-16k1k
+name: janus-nemotron-16k1k
 
 optimization:
   objective: throughput
+  # These are supplied to the agent as user-directed themes, not hard-coded
+  # experiment arguments. The agent must validate each on this model/runtime.
+  priority_items:
+    - FP8 KV cache dtype when supported
+    - batching and scheduler limits for the 16k/1k workload
+    - CUDA graph coverage for representative concurrency
+    - recipe-supported MTP or speculative decoding
+  # Serve the FP8 checkpoint below, while use the BF16 model's vLLM recipe as
+  # the source of architecture-specific guidance.
+  recipe_model_id: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16
 
-# The source of truth for this complete agentic-tuning environment.
 environment:
   namespace: agentic-tuning-32k1k
   hardware: H200
@@ -11,20 +20,19 @@ environment:
     kubernetes.io/hostname: psap-de-h200-cluster-6mgmp-gpu-h200-7zgjh
   image: vllm/vllm-openai:v0.26.0
   model:
-    id: RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic
-    cache_path: /models/RedHatAI--gemma-4-26B-A4B-it-FP8-dynamic
+    id: RedHatAI/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-FP8
+    cache_path: /models/RedHatAI--NVIDIA-Nemotron-3.5-Lightning-30B-A3B-FP8
   cache:
-    pvc_name: vllm-model-cache
+    pvc_name: vllm-nemotron-model-cache
     storage_class: lvms-vg-gpu-node
     size: 200Gi
   model_access:
     source_namespace: gemma4-bench
     secret_name: hf-token
     secret_key: HF_TOKEN
-  # Preserve the completed cache-population Job on repeat profile runs.
-  download_job_name: download-gemma-4-26b
+  download_job_name: download-nemotron-30b-a3b-fp8
   baseline:
-    name: gemma-4-tp4-baseline
+    name: nemotron-30b-tp4-baseline
     cleanup_after_benchmark: true
     resources:
       cpu: "32"
@@ -52,6 +60,9 @@ workload:
 
 constraints:
   max_tensor_parallel_size: 4
+  # Hard cap on actual launched trial pods; agent reasoning and diagnostics do
+  # not consume this budget.
+  max_experiments: 20
 
 runtime:
   max_model_len: 32768

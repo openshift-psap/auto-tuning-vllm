@@ -20,6 +20,7 @@ import os
 import subprocess
 import tempfile
 import time
+from pathlib import Path
 from typing import Optional
 
 import yaml
@@ -53,11 +54,13 @@ class PodManager:
         kubeconfig: Optional[str] = None,
         base_pod_yaml_path: str = "examples/agent/experiment-pod.yaml",
         base_port: int = 8001,
+        artifact_dir: str | Path | None = None,
     ):
         self.namespace = namespace
         self.kubeconfig = kubeconfig
         self.base_yaml_path = base_pod_yaml_path
         self.active_pods: dict[str, dict] = {}
+        self.artifact_dir = Path(artifact_dir) if artifact_dir else None
 
         # Load and validate the template once
         with open(self.base_yaml_path, "r") as f:
@@ -97,6 +100,14 @@ class PodManager:
             raise ValueError(
                 "Prefix caching is a fixed study control and cannot be changed "
                 f"by an experiment: {prefix_cache_args}"
+            )
+        quantization_args = [
+            arg for arg in vllm_args if arg.split("=", 1)[0] == "--quantization"
+        ]
+        if quantization_args:
+            raise ValueError(
+                "Do not use vLLM --quantization in this study. Select an externally "
+                "quantized model checkpoint instead."
             )
         manifest = copy.deepcopy(self._template)
 
@@ -231,6 +242,67 @@ class PodManager:
         diagnostics["cleanup"] = "Resources were cleaned up."
         return json.dumps({"experiment_lifecycle": "failed", **diagnostics})
 
+    def archive_pod_logs(self, pod_name: str) -> Path | None:
+        """Archive experiment diagnostics before deleting its Pod.
+
+        The current and previous container logs are preserved in full, rather
+        than the bounded tail supplied to the agent. Pod state and events are
+        saved alongside them so a failed experiment remains reproducible after
+        its cluster resources are gone.
+        """
+        if self.artifact_dir is None:
+            return None
+
+        pod_dir = self.artifact_dir / "pods" / pod_name
+        pod_dir.mkdir(parents=True, exist_ok=True)
+        oc_base = self._build_oc_base()
+        captures = {
+            "current.log": oc_base
+            + ["logs", pod_name, "--all-containers=true", "--prefix=true"],
+            "previous.log": oc_base
+            + [
+                "logs",
+                pod_name,
+                "--all-containers=true",
+                "--prefix=true",
+                "--previous=true",
+            ],
+            "pod.json": oc_base + ["get", "pod", pod_name, "-o", "json"],
+            "events.txt": oc_base
+            + [
+                "get",
+                "events",
+                "--field-selector",
+                f"involvedObject.name={pod_name}",
+                "--sort-by=.lastTimestamp",
+            ],
+        }
+        current_log_failure = None
+        for filename, command in captures.items():
+            try:
+                result = subprocess.run(
+                    command, capture_output=True, text=True, timeout=60
+                )
+            except subprocess.TimeoutExpired as exc:
+                if filename == "current.log":
+                    current_log_failure = f"timed out: {exc}"
+                content = f"archive command timed out: {exc}\n"
+            else:
+                content = result.stdout
+                if result.stderr:
+                    content += f"\n--- stderr ---\n{result.stderr}"
+                if filename == "current.log" and result.returncode:
+                    current_log_failure = result.stderr.strip() or "oc logs failed"
+            (pod_dir / filename).write_text(content, encoding="utf-8")
+
+        if current_log_failure:
+            raise ExperimentLifecycleError(
+                f"Could not archive logs for pod {pod_name}: {current_log_failure}. "
+                "The pod was retained for user intervention."
+            )
+        print(f"   Archived pod diagnostics: {pod_dir}", flush=True)
+        return pod_dir
+
     def _start_port_forward(
         self, pod_name: str, local_port: int, remote_port: int = 8000
     ) -> subprocess.Popen:
@@ -294,7 +366,8 @@ class PodManager:
 
         except Exception as exc:
             # A failed readiness check happens before this pod is recorded in
-            # active_pods, so clean both resources explicitly.
+            # active_pods. Preserve its diagnostics before cleaning resources.
+            self.archive_pod_logs(pod_name)
             self._delete_untracked_experiment(pod_name)
             raise
 
@@ -341,18 +414,22 @@ class PodManager:
         """
         info = self.active_pods.get(pod_name)
 
-        # Delete pod
+        # Never delete evidence before preserving it for post-experiment
+        # analysis. A failed archive intentionally leaves the Pod intact.
+        self.archive_pod_logs(pod_name)
+
+        # Delete gracefully. Do not force-delete an experiment: that can lose
+        # shutdown diagnostics and makes a lifecycle failure harder to inspect.
         delete_cmd = self._build_oc_base() + [
             "delete",
             "pod",
             pod_name,
-            "--grace-period=0",
-            "--force",
+            "--wait=true",
         ]
         delete_error: str | None = None
         try:
             result = subprocess.run(
-                delete_cmd, capture_output=True, text=True, timeout=30
+                delete_cmd, capture_output=True, text=True, timeout=120
             )
             if result.returncode == 0:
                 print(f"   Pod {pod_name} deleted.", flush=True)

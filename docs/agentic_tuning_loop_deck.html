@@ -87,7 +87,7 @@
     <div class="brand">DEVCONF<small>.US</small></div>
     <div class="cover-main">
       <h1>Inside the vLLM<br>agentic tuning loop</h1>
-      <p>Control flow at 23f7081: baseline Job, optional resource release, version-guarded recipe tool, candidate Pods, and comparison</p>
+      <p>Control flow at bff1d9c: baseline Job, optional resource release, version-guarded recipe tool, candidate Pods, and comparison</p>
     </div>
     <div class="foot">01 / 11 · implementation walkthrough</div>
   </section>
@@ -111,7 +111,7 @@
     </div>
     <div class="cols two">
       <div class="panel"><h3>Provisioning sequence</h3><p>Copy model-access secret; apply model and results PVCs; run downloader only if incomplete. Apply baseline Deployment and Service. If the Deployment existed, issue <code>oc rollout restart</code>; then wait for rollout status.</p></div>
-      <div class="panel"><h3>Study inputs</h3><p>The profile supplies model, GPU resources, TP ceiling, base vLLM args, selected workload, and <code>optimization.objective</code> (<code>throughput</code> or <code>latency</code>). Candidate manifests derive from the same rendered container spec.</p></div>
+      <div class="panel"><h3>Study inputs</h3><p>The profile supplies model, GPU resources, TP ceiling, base vLLM args, workload, and <code>optimization.objective</code>. The Janus profile now uses vLLM <code>v0.30.0</code>. Baseline and candidate manifests mount a 2 GiB memory-backed <code>/dev/shm</code> when TP &gt; 1.</p></div>
     </div>
     <div class="note">After the baseline Job, <code>cleanup_after_benchmark</code> can delete its Deployment and Service before the loop (enabled in the Janus profile). The model-cache and results PVCs persist.</div>
     <div class="railmark">DEV<br>CONF<br>.US</div><div class="foot">03 / 11</div>
