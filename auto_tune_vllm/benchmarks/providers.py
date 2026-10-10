@@ -337,7 +337,7 @@ class GuideLLMBenchmark(BenchmarkProvider):
             "--output-path",
             results_file,
             "--processor-args",
-            '{"trust-remote-code":"true"}'
+            json.dumps({"trust_remote_code": True})
         ]
 
         # Add dataset or synthetic data configuration
