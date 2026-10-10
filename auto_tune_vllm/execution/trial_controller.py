@@ -1379,4 +1379,11 @@ class RayTrialActor(RayWorkerTrialController):
 
     def __del__(self):
         """Ensure cleanup on actor destruction."""
-        self.cleanup_resources()
+        # Newer Ray versions invoke __del__ on the driver-side ActorClass
+        # proxy (e.g. during ray.shutdown/GC), which never ran __init__.
+        # Guard so __del__ never raises on an uninitialized object.
+        try:
+            if hasattr(self, "trial_loggers"):
+                self.cleanup_resources()
+        except Exception:
+            pass
